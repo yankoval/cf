@@ -57,11 +57,15 @@ def handler(event, context):
 
             # Get object content
             response = s3.get_object(Bucket=bucket_id, Key=object_id)
-            content = response['Body'].read().decode('utf-8')
+            # Use 'utf-8-sig' to automatically handle Byte Order Mark (BOM) if present
+            content_bytes = response['Body'].read()
             try:
+                content = content_bytes.decode('utf-8-sig')
                 data = json.loads(content)
-            except json.JSONDecodeError:
-                logger.error(f"Failed to parse JSON for {object_id}")
+            except (UnicodeDecodeError, json.JSONDecodeError) as e:
+                logger.error(f"Failed to parse JSON for {object_id}: {str(e)}")
+                # Log a snippet for debugging (first 200 chars)
+                logger.debug(f"Content snippet: {content_bytes[:200]!r}")
                 s3.put_object_tagging(
                     Bucket=bucket_id,
                     Key=object_id,
