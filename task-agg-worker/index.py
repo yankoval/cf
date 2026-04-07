@@ -3,6 +3,7 @@ import json
 import logging
 import boto3
 from botocore.exceptions import ClientError
+from botocore.config import Config
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -13,7 +14,8 @@ def get_s3_client():
         endpoint_url=os.getenv('S3_ENDPOINT', 'https://storage.yandexcloud.net'),
         aws_access_key_id=os.getenv('S3_ACCESS_KEY_ID'),
         aws_secret_access_key=os.getenv('S3_SECRET_ACCESS_KEY'),
-        region_name='ru-central1'
+        region_name='ru-central1',
+        config=Config(signature_version='s3v4')
     )
 
 def handler(event, context):
@@ -90,13 +92,13 @@ def handler(event, context):
             report_key = f"{report_path_prefix}{data['id']}.json"
 
             try:
+                # We remove ContentType and ACL from Params to avoid SignatureDoesNotMatch errors
+                # when the caller (equipment) doesn't provide these exact headers in their PUT request.
                 presigned_url = s3.generate_presigned_url(
                     'put_object',
                     Params={
                         'Bucket': bucket_env,
-                        'Key': report_key,
-                        'ContentType': 'application/json',
-                        'ACL': 'public-read'
+                        'Key': report_key
                     },
                     ExpiresIn=url_expiration
                 )
