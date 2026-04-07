@@ -1,7 +1,11 @@
 import os
 import json
+import logging
 import boto3
 from botocore.exceptions import ClientError
+
+logger = logging.getLogger()
+logger.setLevel(logging.INFO)
 
 def get_s3_client():
     return boto3.client(
@@ -30,7 +34,7 @@ def handler(event, context):
 
         # Check prefix
         if not object_id.startswith(filter_prefix):
-            print(f"Skipping {object_id}: does not match prefix {filter_prefix}")
+            logger.info(f"Skipping {object_id}: does not match prefix {filter_prefix}")
             continue
 
         try:
@@ -38,12 +42,12 @@ def handler(event, context):
             tagging = s3.get_object_tagging(Bucket=bucket_id, Key=object_id)
             tags = {t['Key']: t['Value'] for t in tagging.get('TagSet', [])}
             if 'status' in tags:
-                print(f"Skipping {object_id}: already has status {tags['status']}")
+                logger.info(f"Skipping {object_id}: already has status {tags['status']}")
                 continue
 
             # Check extension
             if not object_id.lower().endswith('.json'):
-                print(f"File {object_id} is not a JSON file.")
+                logger.error(f"File {object_id} is not a JSON file.")
                 s3.put_object_tagging(
                     Bucket=bucket_id,
                     Key=object_id,
@@ -57,7 +61,7 @@ def handler(event, context):
             try:
                 data = json.loads(content)
             except json.JSONDecodeError:
-                print(f"Failed to parse JSON for {object_id}")
+                logger.error(f"Failed to parse JSON for {object_id}")
                 s3.put_object_tagging(
                     Bucket=bucket_id,
                     Key=object_id,
@@ -70,7 +74,7 @@ def handler(event, context):
             mandatory_fields = ['id', 'gtin', 'numРacksInBox', 'boxLabelFields']
             missing_fields = [f for f in mandatory_fields if f not in data]
             if missing_fields:
-                print(f"Missing mandatory fields in {object_id}: {missing_fields}")
+                logger.error(f"Missing mandatory fields in {object_id}: {missing_fields}")
                 s3.put_object_tagging(
                     Bucket=bucket_id,
                     Key=object_id,
@@ -93,7 +97,7 @@ def handler(event, context):
                     ExpiresIn=url_expiration
                 )
             except ClientError as e:
-                print(f"Error generating presigned URL: {e}")
+                logger.error(f"Error generating presigned URL: {e}")
                 continue
 
             # Update JSON data
@@ -114,10 +118,10 @@ def handler(event, context):
                 Key=object_id,
                 Tagging={'TagSet': [{'Key': 'status', 'Value': 'processed'}]}
             )
-            print(f"Successfully processed {object_id} -> {dest_key}")
+            logger.info(f"Successfully processed {object_id} -> {dest_key}")
 
         except Exception as e:
-            print(f"Error processing {object_id}: {e}")
+            logger.exception(f"Error processing {object_id}: {e}")
             try:
                 s3.put_object_tagging(
                     Bucket=bucket_id,
