@@ -110,7 +110,8 @@ def handler(event, context):
             data['task-export-signed-link'] = presigned_url
 
             # Upload modified file
-            dest_key = f"{dest_path_prefix}{data['gtin']}-{data['id']}.json"
+            source_file_name = os.path.splitext(os.path.basename(object_id))[0]
+            dest_key = f"{dest_path_prefix}{source_file_name}-{data['gtin']}.json"
             s3.put_object(
                 Bucket=bucket_env,
                 Key=dest_key,
