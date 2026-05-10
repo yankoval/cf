@@ -1,6 +1,6 @@
-import * as SQS from "@aws-sdk/client-sqs";
-import { S3Client, GetObjectCommand, PutObjectCommand } from "@aws-sdk/client-s3";
-import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
+const SQS = require("@aws-sdk/client-sqs");
+const { S3Client, GetObjectCommand, PutObjectCommand } = require("@aws-sdk/client-s3");
+const { getSignedUrl } = require("@aws-sdk/s3-request-presigner");
 
 const sqsClient = new SQS.SQSClient({
   endpoint: process.env.YMQ_ENDPOINT || "https://message-queue.api.cloud.yandex.net",
@@ -17,7 +17,7 @@ const QUEUE_URL = process.env.YMQ_QUEUE_URL;
 const UPLOAD_BUCKET = process.env.UPLOAD_BUCKET;
 const URL_EXPIRATION = parseInt(process.env.URL_EXPIRATION || "3600");
 
-export const handler = async (event) => {
+module.exports.handler = async function (event, context) {
   // CORS Headers
   const headers = {
     "Access-Control-Allow-Origin": "*",
