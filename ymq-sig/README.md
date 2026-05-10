@@ -1,0 +1,88 @@
+# YMQ Proxy & S3 Link Signer (ymq-sig)
+
+Node.js функция для обеспечения доступа JavaScript-клиентов к очереди Yandex Message Queue (YMQ) и автоматической генерации подписанных ссылок S3 для скачивания исходных файлов и загрузки подписей (`.sig`).
+
+## Возможности
+
+- Проксирование любых SQS/YMQ операций (`SendMessage`, `ReceiveMessage`, `DeleteMessage` и др.).
+- Автоматическое обнаружение событий S3 в сообщениях очереди.
+- Генерация signed URLs для:
+  - Скачивания исходного объекта S3.
+  - Загрузки файла подписи (с расширением `.sig`) в тот же или указанный бакет.
+- Валидация API Key (`X-Api-Key`).
+- Поддержка CORS для работы из браузера.
+
+## Переменные окружения
+
+Для работы функции необходимо настроить следующие переменные:
+
+| Переменная | Описание | Обязательно | Значение по умолчанию |
+| :--- | :--- | :---: | :--- |
+| `API_KEY` | Ключ для доступа к функции (передается в заголовке `X-Api-Key`) | Нет | (Без проверки, если не задан) |
+| `YMQ_QUEUE_URL` | URL очереди YMQ по умолчанию | Да | - |
+| `UPLOAD_BUCKET` | Бакет для загрузки `.sig` файлов | Нет | (Бакет из сообщения) |
+| `YMQ_ENDPOINT` | Эндпоинт YMQ | Нет | `https://message-queue.api.cloud.yandex.net` |
+| `S3_ENDPOINT` | Эндпоинт S3 | Нет | `https://storage.yandexcloud.net` |
+| `URL_EXPIRATION` | Срок действия подписанных ссылок (сек) | Нет | `3600` |
+| `AWS_REGION` | Регион Yandex Cloud | Нет | `ru-central1` |
+
+## Настройка в Yandex Cloud
+
+### 1. Сервисный аккаунт
+Создайте сервисный аккаунт и назначьте ему роли:
+- `ymq.viewer` (или `ymq.editor` для удаления сообщений)
+- `storage.viewer`
+- `storage.uploader` (для генерации ссылок на загрузку)
+
+### 2. Создание функции
+1. Создайте Cloud Function (Node.js 18+).
+2. Загрузите файлы `index.js`, `package.json`.
+3. Установите точку входа: `index.handler`.
+4. В разделе "Переменные окружения" добавьте значения из таблицы выше.
+5. Выберите созданный ранее сервисный аккаунт.
+
+### 3. Настройка API Gateway
+Настройте шлюз для доступа к функции. Пример спецификации:
+
+```yaml
+openapi: 3.0.0
+info:
+  title: YMQ Proxy API
+  version: 1.0.0
+paths:
+  /:
+    post:
+      x-yc-apigateway-integration:
+        type: cloud_functions
+        function_id: <ID_ВАШЕЙ_ФУНКЦИИ>
+        service_account_id: <ID_СЕРВИСНОГО_АККАУНТА>
+      responses:
+        '200':
+          description: OK
+    options:
+      x-yc-apigateway-integration:
+        type: cloud_functions
+        function_id: <ID_ВАШЕЙ_ФУНКЦИИ>
+      responses:
+        '204':
+          description: No Content
+```
+
+## Использование (Frontend)
+
+Откройте `index.html` в браузере, введите URL вашего API Gateway и API Key. При нажатии "Poll Queue" функция вернет сообщения, дополненные объектом `S3Links`:
+
+```json
+{
+  "Messages": [
+    {
+      "Body": "...",
+      "S3Links": {
+        "downloadUrl": "https://...",
+        "uploadUrl": "https://...",
+        "sigKey": "path/to/file.json.sig"
+      }
+    }
+  ]
+}
+```
