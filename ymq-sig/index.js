@@ -2,20 +2,36 @@ const SQS = require("@aws-sdk/client-sqs");
 const { S3Client, GetObjectCommand, PutObjectCommand } = require("@aws-sdk/client-s3");
 const { getSignedUrl } = require("@aws-sdk/s3-request-presigner");
 
-const sqsClient = new SQS.SQSClient({
-  endpoint: process.env.YMQ_ENDPOINT || "https://message-queue.api.cloud.yandex.net",
-  region: process.env.AWS_REGION || "ru-central1",
-});
-
-const s3Client = new S3Client({
-  endpoint: process.env.S3_ENDPOINT || "https://storage.yandexcloud.net",
-  region: process.env.AWS_REGION || "ru-central1",
-});
+// Configuration from environment
+const S3_ENDPOINT = process.env.S3_ENDPOINT || "https://storage.yandexcloud.net";
+const YMQ_ENDPOINT = process.env.YMQ_ENDPOINT || "https://message-queue.api.cloud.yandex.net";
+const REGION = process.env.AWS_REGION || "ru-central1";
+const ACCESS_KEY_ID = process.env.ACCESS_KEY_ID || process.env.S3_ACCESS_KEY_ID;
+const SECRET_ACCESS_KEY = process.env.SECRET_ACCESS_KEY || process.env.S3_SECRET_ACCESS_KEY;
 
 const API_KEY = process.env.API_KEY;
 const QUEUE_URL = process.env.YMQ_QUEUE_URL;
 const UPLOAD_BUCKET = process.env.UPLOAD_BUCKET;
 const URL_EXPIRATION = parseInt(process.env.URL_EXPIRATION || "3600");
+
+// Helper to get client config
+const getClientConfig = (endpoint) => {
+  const config = {
+    endpoint: endpoint,
+    region: REGION,
+  };
+  // Add credentials if provided explicitly, otherwise SDK will try Service Account
+  if (ACCESS_KEY_ID && SECRET_ACCESS_KEY) {
+    config.credentials = {
+      accessKeyId: ACCESS_KEY_ID,
+      secretAccessKey: SECRET_ACCESS_KEY,
+    };
+  }
+  return config;
+};
+
+const sqsClient = new SQS.SQSClient(getClientConfig(YMQ_ENDPOINT));
+const s3Client = new S3Client(getClientConfig(S3_ENDPOINT));
 
 module.exports.handler = async function (event, context) {
   console.log("Event received:", JSON.stringify(event));
@@ -45,7 +61,11 @@ module.exports.handler = async function (event, context) {
         statusCode: 200,
         headers,
         isBase64Encoded: false,
-        body: JSON.stringify({ status: "OK", message: "YMQ Proxy is running" })
+        body: JSON.stringify({
+          status: "OK",
+          message: "YMQ Proxy is running",
+          authMode: (ACCESS_KEY_ID && SECRET_ACCESS_KEY) ? "Explicit Keys" : "Service Account"
+        })
       };
     }
 
@@ -155,7 +175,7 @@ module.exports.handler = async function (event, context) {
             };
           }
         } catch (e) {
-          console.warn("Could not enrich message:", e.message);
+          console.warn("Could enrich message:", e.message);
         }
       }
     }
