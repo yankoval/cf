@@ -106,3 +106,35 @@ paths:
   ]
 }
 ```
+
+---
+
+## Technical Specification for AI Assistants (System Integration)
+
+Copy this section to provide context to an AI assistant in another project:
+
+**Service Role:** YMQ/S3 Proxy & Signing Gateway.
+**Interface:** REST API via API Gateway.
+**Protocol:** POST for actions, OPTIONS for CORS.
+
+**Request Requirements:**
+- **URL:** `<API_GATEWAY_URL>`
+- **Headers:**
+  - `Content-Type: application/json`
+  - `X-Api-Key: <YOUR_API_KEY>`
+- **Body Schema:**
+  ```json
+  {
+    "action": "SQS_COMMAND_NAME", // e.g., "ReceiveMessage", "SendMessage", "DeleteMessage"
+    "params": { ... } // Standard AWS SDK v3 SQS Command parameters
+  }
+  ```
+
+**Automatic Enrichment (ReceiveMessage):**
+The function automatically detects S3 object references (Standard Yandex S3 Event or Celery v2 format) in message bodies. It injects an `S3Links` object into each message:
+- `downloadUrl`: Presigned GET URL for the source file.
+- `uploadUrl`: Presigned PUT URL for `<original_key>.sig`.
+- `sigKey`: The expected key for the signature file.
+
+**Upload Requirements (.sig):**
+When uploading to `uploadUrl`, you **must** use `PUT` method and set `Content-Type: application/octet-stream`.
