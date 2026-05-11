@@ -42,10 +42,56 @@ const getClientConfig = (endpoint) => {
 const sqsClient = new SQS.SQSClient(getClientConfig(YMQ_ENDPOINT));
 const s3Client = new S3Client(getClientConfig(S3_ENDPOINT));
 
+/**
+ * Extracts S3 bucket and key from various message formats.
+ * Supports:
+ * 1. Standard Yandex S3 Event (message.details)
+ * 2. Flat format { bucket_id, object_id }
+ * 3. Celery v2 Protocol (Base64 body, args containing bucket/key)
+ */
+function extractS3Details(body) {
+  try {
+    let data = typeof body === "string" ? JSON.parse(body) : body;
+
+    // Format 1: Standard Yandex S3 Event
+    if (data.messages && data.messages[0] && data.messages[0].details) {
+      const details = data.messages[0].details;
+      return { bucket: details.bucket_id, key: details.object_id };
+    }
+
+    // Format 2: Flat format
+    if (data.bucket_id && data.object_id) {
+      return { bucket: data.bucket_id, key: data.object_id };
+    }
+
+    // Format 3: Celery v2 Protocol
+    if (data.properties && data.properties.body_encoding === "base64" && data.body) {
+      const decodedBody = Buffer.from(data.body, "base64").toString();
+      const celeryData = JSON.parse(decodedBody);
+      // Celery tasks args are typically [args, kwargs, embed]
+      // In this project, args[0] is often an object with bucket/key or a list of such objects
+      if (Array.isArray(celeryData) && celeryData[0]) {
+        const args = celeryData[0];
+        const taskObj = Array.isArray(args) ? args[0] : args;
+
+        // Handle both 'bucket'/'key' and 'bucket_id'/'object_id' naming
+        const bucket = taskObj.bucket || taskObj.bucket_id;
+        const key = taskObj.key || taskObj.object_id;
+
+        if (bucket && key) {
+          return { bucket, key };
+        }
+      }
+    }
+  } catch (e) {
+    console.warn("Failed to parse message body for S3 details:", e.message);
+  }
+  return null;
+}
+
 module.exports.handler = async function (event, context) {
   console.log("Event received:", JSON.stringify(event));
 
-  // CORS Headers
   const headers = {
     "Access-Control-Allow-Origin": "*",
     "Access-Control-Allow-Headers": "Content-Type,X-Api-Key",
@@ -54,17 +100,10 @@ module.exports.handler = async function (event, context) {
   };
 
   try {
-    // Handle preflight
     if (event.httpMethod === "OPTIONS") {
-      return {
-        statusCode: 204,
-        headers,
-        isBase64Encoded: false,
-        body: ""
-      };
+      return { statusCode: 204, headers, isBase64Encoded: false, body: "" };
     }
 
-    // Health check
     if (event.httpMethod === "GET") {
       return {
         statusCode: 200,
@@ -72,19 +111,15 @@ module.exports.handler = async function (event, context) {
         isBase64Encoded: false,
         body: JSON.stringify({
           status: "OK",
-          message: "YMQ Proxy is running",
-          authMode: (ACCESS_KEY_ID && SECRET_ACCESS_KEY) ? "Explicit Keys" : "Service Account",
-          timeout: CLIENT_TIMEOUT
+          authMode: (ACCESS_KEY_ID && SECRET_ACCESS_KEY) ? "Explicit Keys" : "Service Account"
         })
       };
     }
 
-    // API Key Validation
     const requestHeaders = event.headers || {};
     const apiKey = requestHeaders["X-Api-Key"] || requestHeaders["x-api-key"];
 
     if (API_KEY && apiKey !== API_KEY) {
-      console.warn("Invalid API Key provided");
       return {
         statusCode: 403,
         headers,
@@ -97,7 +132,6 @@ module.exports.handler = async function (event, context) {
     try {
       body = event.body ? JSON.parse(event.body) : {};
     } catch (e) {
-      console.error("JSON Parse Error:", e.message);
       return {
         statusCode: 400,
         headers,
@@ -108,14 +142,8 @@ module.exports.handler = async function (event, context) {
 
     const { action, params = {} } = body;
 
-    // Support a simple ping action
     if (action === "ping") {
-      return {
-        statusCode: 200,
-        headers,
-        isBase64Encoded: false,
-        body: JSON.stringify({ pong: true })
-      };
+      return { statusCode: 200, headers, isBase64Encoded: false, body: JSON.stringify({ pong: true }) };
     }
 
     if (!action) {
@@ -127,12 +155,10 @@ module.exports.handler = async function (event, context) {
       };
     }
 
-    // Default to configured QueueUrl if not provided in params
     if (!params.QueueUrl && QUEUE_URL) {
       params.QueueUrl = QUEUE_URL;
     }
 
-    // Dynamic Command execution for SQS
     const commandName = `${action}Command`;
     if (!SQS[commandName]) {
       return {
@@ -147,23 +173,15 @@ module.exports.handler = async function (event, context) {
     const command = new SQS[commandName](params);
     let response = await sqsClient.send(command);
 
-    // Enrichment for ReceiveMessage: Generate signed S3 links
     if (action === "ReceiveMessage" && response.Messages) {
       for (let message of response.Messages) {
-        try {
-          const bodyData = JSON.parse(message.Body);
-          let s3Event = null;
+        const s3Details = extractS3Details(message.Body);
 
-          if (bodyData.messages && bodyData.messages[0] && bodyData.messages[0].details) {
-            s3Event = bodyData.messages[0].details;
-          } else if (bodyData.bucket_id && bodyData.object_id) {
-            s3Event = bodyData;
-          }
+        if (s3Details) {
+          const { bucket, key } = s3Details;
+          console.log(`Found S3 details: bucket=${bucket}, key=${key}`);
 
-          if (s3Event) {
-            const bucket = s3Event.bucket_id;
-            const key = s3Event.object_id;
-
+          try {
             const getCommand = new GetObjectCommand({ Bucket: bucket, Key: key });
             const downloadUrl = await getSignedUrl(s3Client, getCommand, { expiresIn: URL_EXPIRATION });
 
@@ -183,9 +201,9 @@ module.exports.handler = async function (event, context) {
               originalKey: key,
               sigKey: sigKey
             };
+          } catch (e) {
+            console.error("Error generating signed URLs:", e.message);
           }
-        } catch (e) {
-          console.warn("Could enrich message:", e.message);
         }
       }
     }
@@ -203,10 +221,7 @@ module.exports.handler = async function (event, context) {
       statusCode: error.$metadata?.httpStatusCode || 500,
       headers,
       isBase64Encoded: false,
-      body: JSON.stringify({
-        error: error.message,
-        code: error.name
-      }),
+      body: JSON.stringify({ error: error.message, code: error.name }),
     };
   }
 };
