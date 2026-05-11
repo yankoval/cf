@@ -1,6 +1,7 @@
 const SQS = require("@aws-sdk/client-sqs");
 const { S3Client, GetObjectCommand, PutObjectCommand } = require("@aws-sdk/client-s3");
 const { getSignedUrl } = require("@aws-sdk/s3-request-presigner");
+const { NodeHttpHandler } = require("@smithy/node-http-handler");
 
 // Configuration from environment
 const S3_ENDPOINT = process.env.S3_ENDPOINT || "https://storage.yandexcloud.net";
@@ -13,12 +14,20 @@ const API_KEY = process.env.API_KEY;
 const QUEUE_URL = process.env.YMQ_QUEUE_URL;
 const UPLOAD_BUCKET = process.env.UPLOAD_BUCKET;
 const URL_EXPIRATION = parseInt(process.env.URL_EXPIRATION || "3600");
+const CLIENT_TIMEOUT = parseInt(process.env.CLIENT_TIMEOUT || "3000"); // Default 3s
+
+// Shared HTTP handler with timeout
+const requestHandler = new NodeHttpHandler({
+  connectionTimeout: CLIENT_TIMEOUT,
+  socketTimeout: CLIENT_TIMEOUT,
+});
 
 // Helper to get client config
 const getClientConfig = (endpoint) => {
   const config = {
     endpoint: endpoint,
     region: REGION,
+    requestHandler: requestHandler,
   };
   // Add credentials if provided explicitly, otherwise SDK will try Service Account
   if (ACCESS_KEY_ID && SECRET_ACCESS_KEY) {
@@ -64,7 +73,8 @@ module.exports.handler = async function (event, context) {
         body: JSON.stringify({
           status: "OK",
           message: "YMQ Proxy is running",
-          authMode: (ACCESS_KEY_ID && SECRET_ACCESS_KEY) ? "Explicit Keys" : "Service Account"
+          authMode: (ACCESS_KEY_ID && SECRET_ACCESS_KEY) ? "Explicit Keys" : "Service Account",
+          timeout: CLIENT_TIMEOUT
         })
       };
     }
