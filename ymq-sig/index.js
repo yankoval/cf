@@ -18,48 +18,81 @@ const UPLOAD_BUCKET = process.env.UPLOAD_BUCKET;
 const URL_EXPIRATION = parseInt(process.env.URL_EXPIRATION || "3600");
 
 module.exports.handler = async function (event, context) {
+  console.log("Event received:", JSON.stringify(event));
+
   // CORS Headers
   const headers = {
     "Access-Control-Allow-Origin": "*",
     "Access-Control-Allow-Headers": "Content-Type,X-Api-Key",
     "Access-Control-Allow-Methods": "OPTIONS,POST",
+    "Content-Type": "application/json"
   };
 
-  // Handle preflight
-  if (event.httpMethod === "OPTIONS") {
-    return { statusCode: 204, headers, body: "" };
-  }
-
-  // API Key Validation
-  const requestHeaders = event.headers || {};
-  const apiKey = requestHeaders["X-Api-Key"] || requestHeaders["x-api-key"];
-
-  if (API_KEY && apiKey !== API_KEY) {
-    return {
-      statusCode: 403,
-      headers,
-      body: JSON.stringify({ error: "Forbidden: Invalid API Key" })
-    };
-  }
-
   try {
+    // Handle preflight
+    if (event.httpMethod === "OPTIONS") {
+      return {
+        statusCode: 204,
+        headers,
+        isBase64Encoded: false,
+        body: ""
+      };
+    }
+
+    // Health check
+    if (event.httpMethod === "GET") {
+      return {
+        statusCode: 200,
+        headers,
+        isBase64Encoded: false,
+        body: JSON.stringify({ status: "OK", message: "YMQ Proxy is running" })
+      };
+    }
+
+    // API Key Validation
+    const requestHeaders = event.headers || {};
+    const apiKey = requestHeaders["X-Api-Key"] || requestHeaders["x-api-key"];
+
+    if (API_KEY && apiKey !== API_KEY) {
+      console.warn("Invalid API Key provided");
+      return {
+        statusCode: 403,
+        headers,
+        isBase64Encoded: false,
+        body: JSON.stringify({ error: "Forbidden: Invalid API Key" })
+      };
+    }
+
     let body;
     try {
-      body = JSON.parse(event.body);
+      body = event.body ? JSON.parse(event.body) : {};
     } catch (e) {
+      console.error("JSON Parse Error:", e.message);
       return {
         statusCode: 400,
         headers,
+        isBase64Encoded: false,
         body: JSON.stringify({ error: "Invalid JSON in request body" })
       };
     }
 
     const { action, params = {} } = body;
 
+    // Support a simple ping action
+    if (action === "ping") {
+      return {
+        statusCode: 200,
+        headers,
+        isBase64Encoded: false,
+        body: JSON.stringify({ pong: true })
+      };
+    }
+
     if (!action) {
       return {
         statusCode: 400,
         headers,
+        isBase64Encoded: false,
         body: JSON.stringify({ error: "Missing 'action' in request body" })
       };
     }
@@ -75,10 +108,12 @@ module.exports.handler = async function (event, context) {
       return {
         statusCode: 400,
         headers,
+        isBase64Encoded: false,
         body: JSON.stringify({ error: `Unsupported SQS action: ${action}` })
       };
     }
 
+    console.log(`Executing SQS action: ${action}`);
     const command = new SQS[commandName](params);
     let response = await sqsClient.send(command);
 
@@ -89,12 +124,9 @@ module.exports.handler = async function (event, context) {
           const bodyData = JSON.parse(message.Body);
           let s3Event = null;
 
-          // Detect standard Yandex S3 Event
           if (bodyData.messages && bodyData.messages[0] && bodyData.messages[0].details) {
             s3Event = bodyData.messages[0].details;
-          }
-          // Detect flat format
-          else if (bodyData.bucket_id && bodyData.object_id) {
+          } else if (bodyData.bucket_id && bodyData.object_id) {
             s3Event = bodyData;
           }
 
@@ -102,11 +134,9 @@ module.exports.handler = async function (event, context) {
             const bucket = s3Event.bucket_id;
             const key = s3Event.object_id;
 
-            // Link for downloading the source file
             const getCommand = new GetObjectCommand({ Bucket: bucket, Key: key });
             const downloadUrl = await getSignedUrl(s3Client, getCommand, { expiresIn: URL_EXPIRATION });
 
-            // Link for uploading the .sig file
             const uploadBucket = UPLOAD_BUCKET || bucket;
             const sigKey = key + ".sig";
             const putCommand = new PutObjectCommand({
@@ -116,7 +146,6 @@ module.exports.handler = async function (event, context) {
             });
             const uploadUrl = await getSignedUrl(s3Client, putCommand, { expiresIn: URL_EXPIRATION });
 
-            // Attach links to the message response object
             message.S3Links = {
               downloadUrl,
               uploadUrl,
@@ -126,8 +155,7 @@ module.exports.handler = async function (event, context) {
             };
           }
         } catch (e) {
-          // Body might not be JSON or not an S3 event, ignore and continue
-          console.warn("Could not enrich message, not a recognized S3 event format:", e.message);
+          console.warn("Could not enrich message:", e.message);
         }
       }
     }
@@ -135,6 +163,7 @@ module.exports.handler = async function (event, context) {
     return {
       statusCode: 200,
       headers,
+      isBase64Encoded: false,
       body: JSON.stringify(response),
     };
 
@@ -143,6 +172,7 @@ module.exports.handler = async function (event, context) {
     return {
       statusCode: error.$metadata?.httpStatusCode || 500,
       headers,
+      isBase64Encoded: false,
       body: JSON.stringify({
         error: error.message,
         code: error.name
