@@ -1,0 +1,140 @@
+# YMQ Proxy & S3 Link Signer (ymq-sig)
+
+Node.js функция для обеспечения доступа JavaScript-клиентов к очереди Yandex Message Queue (YMQ) и автоматической генерации подписанных ссылок S3 для скачивания исходных файлов и загрузки подписей (`.sig`).
+
+## Возможности
+
+- Проксирование любых SQS/YMQ операций (`SendMessage`, `ReceiveMessage`, `DeleteMessage` и др.).
+- Автоматическое обнаружение событий S3 в сообщениях очереди.
+- Генерация signed URLs для:
+  - Скачивания исходного объекта S3.
+  - Загрузки файла подписи (с расширением `.sig`) в тот же или указанный бакет.
+- Валидация API Key (`X-Api-Key`).
+- Поддержка CORS для работы из браузера.
+
+## Переменные окружения
+
+Для работы функции необходимо настроить следующие переменные:
+
+| Переменная | Описание | Обязательно | Значение по умолчанию |
+| :--- | :--- | :---: | :--- |
+| `API_KEY` | Ключ для доступа к функции (передается в заголовке `X-Api-Key`) | Нет | (Без проверки, если не задан) |
+| `YMQ_QUEUE_URL` | URL очереди YMQ по умолчанию | Да | - |
+| `UPLOAD_BUCKET` | Бакет для загрузки `.sig` файлов | Нет | (Бакет из сообщения) |
+| `YMQ_ENDPOINT` | Эндпоинт YMQ | Нет | `https://message-queue.api.cloud.yandex.net` |
+| `S3_ENDPOINT` | Эндпоинт S3 | Нет | `https://storage.yandexcloud.net` |
+| `URL_EXPIRATION` | Срок действия подписанных ссылок (сек) | Нет | `3600` |
+| `AWS_REGION` | Регион Yandex Cloud | Нет | `ru-central1` |
+| `ACCESS_KEY_ID` | Идентификатор ключа доступа (статический ключ) | Нет | (Service Account) |
+| `SECRET_ACCESS_KEY` | Секретный ключ доступа | Нет | (Service Account) |
+| `CLIENT_TIMEOUT` | Таймаут сетевых запросов к YMQ/S3 (мс) | Нет | `3000` |
+
+## Настройка в Yandex Cloud
+
+### 1. Сервисный аккаунт
+Создайте сервисный аккаунт и назначьте ему роли:
+- `ymq.viewer` (или `ymq.editor` для удаления сообщений)
+- `storage.viewer`
+- `storage.uploader` (для генерации ссылок на загрузку)
+
+### 2. Создание функции
+1. Создайте Cloud Function (Node.js 18+).
+2. Загрузите файлы `index.js`, `package.json`.
+   - **Важно:** При загрузке через ZIP-архив убедитесь, что файлы находятся в корне архива.
+   - Если вы используете редактор в консоли, не забудьте нажать "Создать версию".
+3. Установите точку входа: `index.handler`.
+4. В разделе "Переменные окружения" добавьте значения из таблицы выше.
+5. Выберите созданный ранее сервисный аккаунт.
+
+### 3. Настройка API Gateway
+Настройте шлюз для доступа к функции. Пример спецификации:
+
+```yaml
+openapi: 3.0.0
+info:
+  title: YMQ Proxy API
+  version: 1.0.0
+paths:
+  /:
+    post:
+      x-yc-apigateway-integration:
+        type: cloud_functions
+        function_id: <ID_ВАШЕЙ_ФУНКЦИИ>
+        service_account_id: <ID_СЕРВИСНОГО_АККАУНТА>
+      responses:
+        '200':
+          description: OK
+    options:
+      x-yc-apigateway-integration:
+        type: cloud_functions
+        function_id: <ID_ВАШЕЙ_ФУНКЦИИ>
+      responses:
+        '204':
+          description: No Content
+```
+
+## Отладка
+
+Если API Gateway возвращает ошибку 502 или 500:
+1. Проверьте **Логи функции** в консоли Yandex Cloud (раздел "Логи" внутри функции). Там будет детальная ошибка выполнения Node.js.
+2. **Ошибка CredentialsProviderError:** Если в логах ошибка "Could not load credentials", это значит, что функция не может получить права доступа.
+   - Убедитесь, что функции назначен Сервисный аккаунт.
+   - Если Сервисный аккаунт настроен верно, но ошибка сохраняется, попробуйте задать статические ключи через переменные `ACCESS_KEY_ID` и `SECRET_ACCESS_KEY`.
+3. **Ошибка 504 (Timeout):** Если API Gateway возвращает 504, это означает, что выполнение функции занимает слишком много времени.
+   - Увеличьте "Таймаут" в настройках Cloud Function (например, до 10-30 секунд).
+   - Убедитесь, что `WaitTimeSeconds` в запросе к YMQ меньше, чем таймаут функции и шлюза. В примере `index.html` установлено `0`.
+   - Проверьте доступность эндпоинтов YMQ/S3 из вашей сети.
+4. Убедитесь, что у Сервисного аккаунта (или ключей) есть права на YMQ и S3.
+3. Проверьте, что в параметрах функции указана правильная точка входа (`index.handler`).
+4. Убедитесь, что все необходимые зависимости установлены (при загрузке через ZIP-архив папка `node_modules` должна быть включена, либо Yandex Cloud должен иметь доступ к `package.json` для сборки).
+
+## Использование (Frontend)
+
+Откройте `index.html` в браузере, введите URL вашего API Gateway и API Key. При нажатии "Poll Queue" функция вернет сообщения, дополненные объектом `S3Links`:
+
+```json
+{
+  "Messages": [
+    {
+      "Body": "...",
+      "S3Links": {
+        "downloadUrl": "https://...",
+        "uploadUrl": "https://...",
+        "sigKey": "path/to/file.json.sig"
+      }
+    }
+  ]
+}
+```
+
+---
+
+## Technical Specification for AI Assistants (System Integration)
+
+Copy this section to provide context to an AI assistant in another project:
+
+**Service Role:** YMQ/S3 Proxy & Signing Gateway.
+**Interface:** REST API via API Gateway.
+**Protocol:** POST for actions, OPTIONS for CORS.
+
+**Request Requirements:**
+- **URL:** `<API_GATEWAY_URL>`
+- **Headers:**
+  - `Content-Type: application/json`
+  - `X-Api-Key: <YOUR_API_KEY>`
+- **Body Schema:**
+  ```json
+  {
+    "action": "SQS_COMMAND_NAME", // e.g., "ReceiveMessage", "SendMessage", "DeleteMessage"
+    "params": { ... } // Standard AWS SDK v3 SQS Command parameters
+  }
+  ```
+
+**Automatic Enrichment (ReceiveMessage):**
+The function automatically detects S3 object references (Standard Yandex S3 Event or Celery v2 format) in message bodies. It injects an `S3Links` object into each message:
+- `downloadUrl`: Presigned GET URL for the source file.
+- `uploadUrl`: Presigned PUT URL for `<original_key>.sig`.
+- `sigKey`: The expected key for the signature file.
+
+**Upload Requirements (.sig):**
+When uploading to `uploadUrl`, you **must** use `PUT` method and set `Content-Type: application/octet-stream`.

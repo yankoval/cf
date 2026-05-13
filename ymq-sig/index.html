@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>YMQ x S3 Signer</title>
+    <style>
+        body { font-family: sans-serif; max-width: 800px; margin: 2em auto; line-height: 1.6; padding: 0 10px; }
+        .card { border: 1px solid #ddd; padding: 15px; margin-bottom: 15px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
+        .controls { background: #f4f4f4; padding: 20px; border-radius: 8px; margin-bottom: 20px; }
+        .controls input { width: 100%; padding: 8px; margin-bottom: 10px; box-sizing: border-box; }
+        .message-body { background: #eee; padding: 10px; font-family: monospace; white-space: pre-wrap; font-size: 0.9em; max-height: 200px; overflow-y: auto; }
+        .links { margin-top: 10px; }
+        .btn { background: #007bff; color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; text-decoration: none; display: inline-block; }
+        .btn:hover { background: #0056b3; }
+        .btn-delete { background: #dc3545; }
+        .btn-delete:hover { background: #a71d2a; }
+        .status { font-weight: bold; margin-bottom: 10px; }
+        .hidden { display: none; }
+    </style>
+</head>
+<body>
+    <h1>YMQ Proxy & S3 Signer</h1>
+
+    <div class="controls">
+        <label>API Gateway URL:</label>
+        <input type="text" id="gwUrl" placeholder="https://functions.yandexcloud.net/...">
+
+        <label>API Key (X-Api-Key):</label>
+        <input type="password" id="apiKey" placeholder="Your API Key">
+
+        <button id="pollBtn" class="btn">Poll Queue (ReceiveMessage)</button>
+        <span id="globalStatus"></span>
+    </div>
+
+    <div id="messagesContainer">
+        <h3>Messages</h3>
+        <div id="noMessages">No messages received yet.</div>
+    </div>
+
+    <script>
+        const gwUrlInput = document.getElementById('gwUrl');
+        const apiKeyInput = document.getElementById('apiKey');
+        const pollBtn = document.getElementById('pollBtn');
+        const messagesContainer = document.getElementById('messagesContainer');
+        const globalStatus = document.getElementById('globalStatus');
+
+        // Load saved values
+        gwUrlInput.value = localStorage.getItem('ymq_gw_url') || '';
+        apiKeyInput.value = localStorage.getItem('ymq_api_key') || '';
+
+        pollBtn.addEventListener('click', async () => {
+            const url = gwUrlInput.value;
+            const key = apiKeyInput.value;
+
+            if (!url) return alert('Please enter Gateway URL');
+
+            localStorage.setItem('ymq_gw_url', url);
+            localStorage.setItem('ymq_api_key', key);
+
+            globalStatus.textContent = 'Polling...';
+
+            try {
+                const response = await fetch(url, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-Api-Key': key
+                    },
+                    body: JSON.stringify({
+                        action: 'ReceiveMessage',
+                        params: {
+                            MaxNumberOfMessages: 5,
+                            WaitTimeSeconds: 0,
+                            AttributeNames: ['All']
+                        }
+                    })
+                });
+
+                if (!response.ok) {
+                    const err = await response.json();
+                    throw new Error(err.error || 'Request failed');
+                }
+
+                const data = await response.json();
+                globalStatus.textContent = `Received ${data.Messages?.length || 0} messages.`;
+
+                if (data.Messages && data.Messages.length > 0) {
+                    document.getElementById('noMessages').classList.add('hidden');
+                    data.Messages.forEach(displayMessage);
+                }
+            } catch (err) {
+                globalStatus.textContent = 'Error: ' + err.message;
+            }
+        });
+
+        function displayMessage(msg) {
+            const card = document.createElement('div');
+            card.className = 'card';
+            card.id = 'msg-' + msg.MessageId;
+
+            let linksHtml = '';
+            if (msg.S3Links) {
+                linksHtml = `
+                    <div class="links">
+                        <strong>S3 Actions:</strong><br>
+                        <a href="${msg.S3Links.downloadUrl}" target="_blank" class="btn">1. Download Original</a>
+                        <button class="btn" onclick="simulateSignAndUpload('${msg.MessageId}', '${msg.S3Links.uploadUrl}')">2. Upload Signature (.sig)</button>
+                    </div>
+                `;
+            }
+
+            card.innerHTML = `
+                <div><strong>ID:</strong> ${msg.MessageId}</div>
+                <div class="message-body">${msg.Body}</div>
+                ${linksHtml}
+                <div style="margin-top: 10px;">
+                    <button class="btn btn-delete" onclick="deleteMessage('${msg.ReceiptHandle}', 'msg-${msg.MessageId}')">Delete from Queue</button>
+                </div>
+                <div id="status-msg-${msg.MessageId}" class="status"></div>
+            `;
+
+            messagesContainer.insertBefore(card, messagesContainer.firstChild.nextSibling);
+        }
+
+        async function deleteMessage(receiptHandle, cardId) {
+            const url = gwUrlInput.value;
+            const key = apiKeyInput.value;
+            const statusEl = document.getElementById('status-' + cardId);
+
+            statusEl.textContent = 'Deleting...';
+
+            try {
+                const response = await fetch(url, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-Api-Key': key
+                    },
+                    body: JSON.stringify({
+                        action: 'DeleteMessage',
+                        params: { ReceiptHandle: receiptHandle }
+                    })
+                });
+
+                if (response.ok) {
+                    document.getElementById(cardId).style.opacity = '0.5';
+                    statusEl.textContent = 'Deleted successfully.';
+                } else {
+                    const err = await response.json();
+                    statusEl.textContent = 'Delete failed: ' + (err.error || 'Unknown error');
+                }
+            } catch (err) {
+                statusEl.textContent = 'Error: ' + err.message;
+            }
+        }
+
+        async function simulateSignAndUpload(msgId, uploadUrl) {
+            const statusEl = document.getElementById('status-msg-' + msgId);
+
+            // In a real app, you would sign the data here.
+            // Here we just prompt to upload a file as the signature.
+            const input = document.createElement('input');
+            input.type = 'file';
+            input.onchange = async (e) => {
+                const file = e.target.files[0];
+                if (!file) return;
+
+                statusEl.textContent = 'Uploading .sig file...';
+                try {
+                    const response = await fetch(uploadUrl, {
+                        method: 'PUT',
+                        headers: {
+                            'Content-Type': 'application/octet-stream'
+                        },
+                        body: file
+                    });
+
+                    if (response.ok) {
+                        statusEl.textContent = 'Signature uploaded successfully!';
+                    } else {
+                        statusEl.textContent = 'Upload failed: ' + response.statusText;
+                    }
+                } catch (err) {
+                    statusEl.textContent = 'Upload error: ' + err.message;
+                }
+            };
+            input.click();
+        }
+    </script>
+</body>
+</html>

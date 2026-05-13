@@ -1,0 +1,12 @@
+{
+  "name": "ymq-sig",
+  "version": "1.0.0",
+  "description": "YMQ Proxy and S3 Link Signer",
+  "main": "index.js",
+  "dependencies": {
+    "@aws-sdk/client-sqs": "^3.454.0",
+    "@aws-sdk/client-s3": "^3.454.0",
+    "@aws-sdk/s3-request-presigner": "^3.454.0",
+    "@smithy/node-http-handler": "^2.2.0"
+  }
+}
