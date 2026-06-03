@@ -33,65 +33,93 @@ def get_s3_client():
 
 def create_info_image(report_data):
     """
-    Генерирует PNG изображение с информацией из отчета.
+    Генерирует PNG изображение с информацией из отчета, оптимизированное для портретного режима телефона.
     """
-    text = (
-        f"ID: {report_data['id']}\n"
-        f"Оператор: {report_data['operator']}\n"
-        f"Коробок: {report_data['boxes']}\n"
-        f"Продуктов: {report_data['products']}"
-    )
-
-    # Попытка найти шрифт, поддерживающий кириллицу
-    font = None
-    # Сначала ищем в текущей директории функции
-    local_font_path = os.path.join(os.path.dirname(__file__), "DejaVuSans.ttf")
-    font_paths = [
-        local_font_path,
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-        "/usr/share/fonts/ttf-dejavu/DejaVuSans.ttf",
-        "/usr/share/fonts/truetype/freefont/FreeSans.ttf"
+    lines = [
+        ("ОТЧЁТ ОБОРУДОВАНИЯ", True),
+        (f"ID: {report_data['id']}", False),
+        (f"Оператор: {report_data['operator']}", False),
+        (f"Коробок: {report_data['boxes']}", False),
+        (f"Продуктов: {report_data['products']}", False)
     ]
 
-    font_size = 20
-    for path in font_paths:
+    # Попытка найти шрифт
+    font_path = None
+    local_font_path = os.path.join(os.path.dirname(__file__), "DejaVuSans.ttf")
+    check_paths = [
+        local_font_path,
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/ttf-dejavu/DejaVuSans.ttf"
+    ]
+    for path in check_paths:
         if os.path.exists(path):
-            try:
-                font = ImageFont.truetype(path, font_size)
-                break
-            except Exception:
-                continue
+            font_path = path
+            break
 
-    if font is None:
-        logger.warning("Could not find a TrueType font, falling back to default (Cyrillic may not be supported)")
-        font = ImageFont.load_default()
+    # Настройки для "карточки"
+    width = 600 # Фиксированная ширина для предсказуемости на мобильных
+    padding = 40
+    line_spacing = 15
+    title_font_size = 32
+    body_font_size = 24
 
-    # Создаем временное изображение для расчета размеров
-    dummy_img = Image.new('RGB', (1, 1))
-    draw = ImageDraw.Draw(dummy_img)
+    if font_path:
+        title_font = ImageFont.truetype(font_path, title_font_size)
+        body_font = ImageFont.truetype(font_path, body_font_size)
+    else:
+        title_font = body_font = ImageFont.load_default()
 
-    # Получаем размеры текста
-    try:
-        bbox = draw.textbbox((0, 0), text, font=font)
-        tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
-    except AttributeError:
-        # Для старых версий Pillow
-        tw, th = draw.textsize(text, font=font)
+    # Сначала считаем высоту
+    total_height = padding * 2
+    draw_test = ImageDraw.Draw(Image.new('RGB', (1, 1)))
 
-    padding = 30
-    border_width = 3
-    width = tw + padding * 2
-    height = th + padding * 2
+    prepared_lines = []
+    for text, is_title in lines:
+        f = title_font if is_title else body_font
+        # Разбивка длинного ID по словам или символам не нужна, если мы просто хотим портрет,
+        # но ID может быть очень длинным.
+
+        # Функция для переноса длинных строк (например, ID)
+        def wrap_text(t, font, max_w):
+            words = []
+            # Для ID пробуем разбить по дефисам
+            if '-' in t and len(t) > 20:
+                parts = t.split('-')
+                current_line = parts[0]
+                for part in parts[1:]:
+                    test_line = current_line + '-' + part
+                    bbox = draw_test.textbbox((0, 0), test_line, font=font)
+                    if bbox[2] - bbox[0] <= max_w:
+                        current_line = test_line
+                    else:
+                        words.append(current_line + '-')
+                        current_line = part
+                words.append(current_line)
+            else:
+                words = [t]
+            return words
+
+        wrapped = wrap_text(text, f, width - padding * 2)
+        for w_line in wrapped:
+            bbox = draw_test.textbbox((0, 0), w_line, font=f)
+            h = bbox[3] - bbox[1]
+            prepared_lines.append((w_line, f, h))
+            total_height += h + line_spacing
+
+    total_height -= line_spacing # Убираем лишний отступ в конце
 
     # Создаем итоговое изображение
-    img = Image.new('RGB', (width, height), color=(255, 255, 255))
+    img = Image.new('RGB', (width, total_height), color=(255, 255, 255))
     draw = ImageDraw.Draw(img)
 
     # Рисуем рамку
-    draw.rectangle([0, 0, width-1, height-1], outline=(180, 180, 180), width=border_width)
+    draw.rectangle([0, 0, width-1, total_height-1], outline=(200, 200, 200), width=4)
 
     # Рисуем текст
-    draw.text((padding, padding), text, font=font, fill=(40, 40, 40))
+    current_y = padding
+    for text, font, h in prepared_lines:
+        draw.text((padding, current_y), text, font=font, fill=(30, 30, 30))
+        current_y += h + line_spacing
 
     img_byte_arr = io.BytesIO()
     img.save(img_byte_arr, format='PNG')
