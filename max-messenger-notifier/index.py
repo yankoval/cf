@@ -7,6 +7,7 @@ import requests
 import logging
 import io
 from PIL import Image, ImageDraw, ImageFont
+from collections.abc import Iterable, Mapping
 
 # Настройка логирования
 logger = logging.getLogger()
@@ -17,6 +18,71 @@ os.environ['no_proxy'] = '*'
 
 # Глобальный клиент S3 для переиспользования
 s3_client = None
+
+def compact_ssccs(
+    ssccs: Iterable[str],
+    *,
+    prefix_digits: int = 1,
+    company_id_digits: int = 9,
+) -> str:
+    """Вернуть компактный список серийных номеров коробов.
+
+    Пример результата:
+    '1734624-1734630, 1734632, 1734634, 1734672, 1734674'
+
+    prefix_digits=1 и company_id_digits=9 соответствуют SSCC из
+    текущих отчётов: 0 + 460705179 + номер короба + контрольная цифра.
+    """
+    numbers: set[str] = set()
+
+    for original_code in ssccs:
+        code = "".join(char for char in str(original_code) if char.isdigit())
+
+        # Поддержка варианта с AI (00), если код пришёл из GS1-строки.
+        if len(code) == 20 and code.startswith("00"):
+            code = code[2:]
+
+        if len(code) != 18:
+            raise ValueError(
+                f"Ожидался 18-значный SSCC, получено: {original_code!r}"
+            )
+
+        serial_start = prefix_digits + company_id_digits
+        box_number = code[serial_start:-1]  # без контрольной цифры
+
+        if not box_number:
+            raise ValueError(f"Не удалось выделить номер короба: {original_code!r}")
+
+        numbers.add(box_number)
+
+    if not numbers:
+        return ""
+
+    ordered = sorted(numbers, key=int)
+    ranges: list[str] = []
+    start = previous = ordered[0]
+
+    for current in ordered[1:]:
+        if int(current) == int(previous) + 1:
+            previous = current
+            continue
+
+        ranges.append(start if start == previous else f"{start}-{previous}")
+        start = previous = current
+
+    ranges.append(start if start == previous else f"{start}-{previous}")
+    return ", ".join(ranges)
+
+def compact_report_boxes(report: Mapping) -> str:
+    """Сформировать строку для чека из JSON-отчёта агрегации."""
+    try:
+        return compact_ssccs(
+            box["boxNumber"]
+            for box in report.get("readyBox", [])
+            if box.get("boxNumber")
+        )
+    except ValueError:
+        return "—"
 
 def get_s3_client():
     """Инициализация клиента S3 для Yandex Cloud."""
@@ -42,6 +108,9 @@ def create_info_image(report_data):
         (f"Коробок: {report_data['boxes']}", False),
         (f"Продуктов: {report_data['products']}", False)
     ]
+
+    if report_data.get('ssccs'):
+        lines.append((f"Номера коробов: {report_data['ssccs']}", False))
 
     # Попытка найти шрифт
     font_path = None
@@ -79,25 +148,44 @@ def create_info_image(report_data):
         # Разбивка длинного ID по словам или символам не нужна, если мы просто хотим портрет,
         # но ID может быть очень длинным.
 
-        # Функция для переноса длинных строк (например, ID)
+        # Функция для переноса длинных строк
         def wrap_text(t, font, max_w):
-            words = []
-            # Для ID пробуем разбить по дефисам
-            if '-' in t and len(t) > 20:
-                parts = t.split('-')
+            if draw_test.textbbox((0, 0), t, font=font)[2] <= max_w:
+                return [t]
+
+            # Пробуем разбить по пробелам
+            parts = t.split(' ')
+            if len(parts) > 1:
+                lines = []
+                current_line = ""
+                for part in parts:
+                    test_line = (current_line + " " + part).strip()
+                    if draw_test.textbbox((0, 0), test_line, font=font)[2] <= max_w:
+                        current_line = test_line
+                    else:
+                        if current_line:
+                            lines.append(current_line)
+                        current_line = part
+                if current_line:
+                    lines.append(current_line)
+                return lines
+
+            # Если нет пробелов, пробуем разбить по дефисам (для ID)
+            parts = t.split('-')
+            if len(parts) > 1:
+                lines = []
                 current_line = parts[0]
                 for part in parts[1:]:
                     test_line = current_line + '-' + part
-                    bbox = draw_test.textbbox((0, 0), test_line, font=font)
-                    if bbox[2] - bbox[0] <= max_w:
+                    if draw_test.textbbox((0, 0), test_line, font=font)[2] <= max_w:
                         current_line = test_line
                     else:
-                        words.append(current_line + '-')
+                        lines.append(current_line + '-')
                         current_line = part
-                words.append(current_line)
-            else:
-                words = [t]
-            return words
+                lines.append(current_line)
+                return lines
+
+            return [t]
 
         wrapped = wrap_text(text, f, width - padding * 2)
         for w_line in wrapped:
@@ -164,12 +252,14 @@ def handler(event, context):
 
             boxes_count = len(ready_boxes)
             products_count = sum(len(box.get('productNumbersFull', [])) for box in ready_boxes)
+            compact_ssccs_str = compact_report_boxes(data)
 
             report_info = {
                 'id': report_id,
                 'operator': operator,
                 'boxes': boxes_count,
-                'products': products_count
+                'products': products_count,
+                'ssccs': compact_ssccs_str
             }
 
             message_text = (
@@ -179,6 +269,9 @@ def handler(event, context):
                 f"Количество коробок: {boxes_count}\n"
                 f"Количество продуктов: {products_count}"
             )
+
+            if compact_ssccs_str:
+                message_text += f"\nНомера коробов: {compact_ssccs_str}"
 
             # --- ШАГ 1: ГЕНЕРАЦИЯ PNG ---
             logger.info("Generating PNG image")

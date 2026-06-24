@@ -37,12 +37,34 @@ class TestNotifier(unittest.TestCase):
         self.assertEqual(self.sample_data['id'], "T-7333-77-002-2956-C-13-1102120d-9412-43dc-9b10-117dceed298a")
         self.assertEqual(self.sample_data['operator'], "44170d5f34ccf8ef")
 
+    def test_compact_ssccs(self):
+        ssccs = [
+            "046070517917346241",
+            "046070517917346258",
+            "046070517917346265",
+            "046070517917346302",
+            "046070517917346326",
+            "00046070517917346340", # AI (00)
+        ]
+        result = index.compact_ssccs(ssccs)
+        self.assertEqual(result, "1734624-1734626, 1734630, 1734632, 1734634")
+
+    def test_compact_report_boxes_invalid(self):
+        report = {
+            "readyBox": [
+                {"boxNumber": "123"} # Invalid length
+            ]
+        }
+        result = index.compact_report_boxes(report)
+        self.assertEqual(result, "—")
+
     def test_image_generation(self):
         report_info = {
             'id': self.sample_data['id'],
             'operator': self.sample_data['operator'],
             'boxes': 2,
-            'products': 12
+            'products': 12,
+            'ssccs': "1513538, 1513559"
         }
         png_bytes = index.create_info_image(report_info)
         self.assertIsInstance(png_bytes, bytes)
