@@ -104,6 +104,21 @@ class TestNotifier(unittest.TestCase):
                 "046070517921585761",
             ],
         )
+        self.assertEqual(
+            info["pallet_details"],
+            [
+                {
+                    "pallet_number": "046070517921585754",
+                    "boxes": 2,
+                    "products": 3,
+                },
+                {
+                    "pallet_number": "046070517921585761",
+                    "boxes": 1,
+                    "products": 3,
+                },
+            ],
+        )
         self.assertEqual(info["boxes"], 3)
         self.assertEqual(info["products"], 6)
 
@@ -151,6 +166,8 @@ class TestNotifier(unittest.TestCase):
             pallet_number="046070517921585754",
             pallet_index=0,
             pallet_count=2,
+            boxes_count=2,
+            products_count=3,
         )
         self.assertTrue(png_bytes.startswith(b"\x89PNG\r\n\x1a\n"))
 
@@ -252,6 +269,14 @@ class TestNotifier(unittest.TestCase):
         )
         self.assertIn(
             "SSCC: 046070517921585754",
+            mock_send.call_args_list[1].kwargs["text"],
+        )
+        self.assertIn(
+            "Коробов: 2",
+            mock_send.call_args_list[1].kwargs["text"],
+        )
+        self.assertIn(
+            "Штук: 3",
             mock_send.call_args_list[1].kwargs["text"],
         )
         self.assertIn(

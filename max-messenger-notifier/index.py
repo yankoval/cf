@@ -191,17 +191,30 @@ def extract_report_info(report: Mapping) -> dict:
     pallets = get_report_pallets(report)
     boxes = get_report_boxes(report)
     pallet_numbers = []
+    pallet_details = []
 
     for pallet_index, pallet in enumerate(pallets):
         if pallet.get("palletAggregate") is not True:
             raise ValueError(
                 f"readyPallet[{pallet_index}].palletAggregate должен быть true"
             )
-        pallet_numbers.append(
-            normalize_sscc(
-                pallet.get("palletNumber"),
-                f"readyPallet[{pallet_index}].palletNumber",
-            )
+        pallet_number = normalize_sscc(
+            pallet.get("palletNumber"),
+            f"readyPallet[{pallet_index}].palletNumber",
+        )
+        pallet_numbers.append(pallet_number)
+
+        pallet_boxes = pallet.get("readyBox", [])
+        pallet_products = sum(
+            len(box.get("productNumbersFull", []))
+            for box in pallet_boxes
+        )
+        pallet_details.append(
+            {
+                "pallet_number": pallet_number,
+                "boxes": len(pallet_boxes),
+                "products": pallet_products,
+            }
         )
 
     products_count = 0
@@ -221,6 +234,7 @@ def extract_report_info(report: Mapping) -> dict:
         "schema_version": 2 if pallets else 1,
         "pallets": len(pallets),
         "pallet_numbers": pallet_numbers,
+        "pallet_details": pallet_details,
         "boxes": len(boxes),
         "products": products_count,
         "ssccs": compact_report_boxes(report),
@@ -417,6 +431,8 @@ def create_pallet_label_image(
     pallet_number: str,
     pallet_index: int,
     pallet_count: int,
+    boxes_count: int,
+    products_count: int,
 ) -> bytes:
     """Создать печатный ярлык паллета с корректным GS1-128 (AI 00)."""
     sscc = normalize_sscc(pallet_number, "palletNumber")
@@ -454,6 +470,10 @@ def create_pallet_label_image(
         body_font,
         width - padding * 2,
     )
+    count_lines = [
+        f"Коробов: {boxes_count}",
+        f"Штук: {products_count}",
+    ]
     line_height = 38
     total_height = (
         padding
@@ -461,6 +481,8 @@ def create_pallet_label_image(
         + 25
         + len(report_lines) * line_height
         + 25
+        + len(count_lines) * line_height
+        + 15
         + barcode_image.height
         + 25
         + 45
@@ -495,7 +517,18 @@ def create_pallet_label_image(
         )
         current_y += line_height
 
-    current_y += 15
+    current_y += 10
+    for line in count_lines:
+        line_bbox = draw.textbbox((0, 0), line, font=body_font)
+        draw.text(
+            ((width - (line_bbox[2] - line_bbox[0])) / 2, current_y),
+            line,
+            font=body_font,
+            fill="black",
+        )
+        current_y += line_height
+
+    current_y += 10
     label.paste(
         barcode_image,
         ((width - barcode_image.width) // 2, current_y),
@@ -673,16 +706,19 @@ def handler(event, context):
                 continue
 
             pallet_count = report_info["pallets"]
-            for pallet_index, pallet_number in enumerate(
-                report_info["pallet_numbers"]
+            for pallet_index, pallet_info in enumerate(
+                report_info["pallet_details"]
             ):
+                pallet_number = pallet_info["pallet_number"]
                 label_sent = send_file_message(
                     token=token,
                     chat_id=chat_id,
                     text=(
                         f"Ярлык паллета {pallet_index + 1}/{pallet_count}\n"
                         f"Отчёт: {report_info['id']}\n"
-                        f"SSCC: {pallet_number}"
+                        f"SSCC: {pallet_number}\n"
+                        f"Коробов: {pallet_info['boxes']}\n"
+                        f"Штук: {pallet_info['products']}"
                     ),
                     file_name=(
                         f"pallet_{pallet_index + 1}_"
@@ -693,6 +729,8 @@ def handler(event, context):
                         pallet_number=pallet_number,
                         pallet_index=pallet_index,
                         pallet_count=pallet_count,
+                        boxes_count=pallet_info["boxes"],
+                        products_count=pallet_info["products"],
                     ),
                 )
                 if not label_sent:
