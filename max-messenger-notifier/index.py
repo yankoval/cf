@@ -192,7 +192,19 @@ def extract_report_info(report: Mapping) -> dict:
     boxes = get_report_boxes(report)
     pallet_numbers = []
     pallet_details = []
+    product_counts = []
 
+    for box_index, box in enumerate(boxes):
+        products = box.get("productNumbersFull", [])
+        if not isinstance(products, Sequence) or isinstance(
+            products, (str, bytes)
+        ):
+            raise ValueError(
+                f"Короб {box_index}: productNumbersFull должен быть массивом"
+            )
+        product_counts.append(len(products))
+
+    box_offset = 0
     for pallet_index, pallet in enumerate(pallets):
         if pallet.get("palletAggregate") is not True:
             raise ValueError(
@@ -205,10 +217,24 @@ def extract_report_info(report: Mapping) -> dict:
         pallet_numbers.append(pallet_number)
 
         pallet_boxes = pallet.get("readyBox", [])
+        for box_index, box in enumerate(pallet_boxes):
+            location = (
+                f"readyPallet[{pallet_index}].readyBox[{box_index}]"
+            )
+            if box.get("boxAgregate") is not True:
+                raise ValueError(
+                    f"{location}.boxAgregate должен быть true"
+                )
+            normalize_sscc(
+                box.get("boxNumber"),
+                f"{location}.boxNumber",
+            )
+
+        next_box_offset = box_offset + len(pallet_boxes)
         pallet_products = sum(
-            len(box.get("productNumbersFull", []))
-            for box in pallet_boxes
+            product_counts[box_offset:next_box_offset]
         )
+        box_offset = next_box_offset
         pallet_details.append(
             {
                 "pallet_number": pallet_number,
@@ -216,17 +242,6 @@ def extract_report_info(report: Mapping) -> dict:
                 "products": pallet_products,
             }
         )
-
-    products_count = 0
-    for box_index, box in enumerate(boxes):
-        products = box.get("productNumbersFull", [])
-        if not isinstance(products, Sequence) or isinstance(
-            products, (str, bytes)
-        ):
-            raise ValueError(
-                f"Короб {box_index}: productNumbersFull должен быть массивом"
-            )
-        products_count += len(products)
 
     return {
         "id": str(report.get("id") or "N/A"),
@@ -236,7 +251,7 @@ def extract_report_info(report: Mapping) -> dict:
         "pallet_numbers": pallet_numbers,
         "pallet_details": pallet_details,
         "boxes": len(boxes),
-        "products": products_count,
+        "products": sum(product_counts),
         "ssccs": compact_report_boxes(report),
     }
 
@@ -267,6 +282,28 @@ def _read_s3_json(s3, bucket_id: str, object_id: str) -> dict:
     return data
 
 
+def validate_report_identity(
+    object_id: str,
+    report_info: Mapping,
+) -> None:
+    """Для v2 связать имя объекта с ID отчёта до чтения задания."""
+    if report_info["schema_version"] != 2:
+        return
+
+    file_name = object_id.rsplit("/", 1)[-1]
+    if not file_name.endswith(".json"):
+        raise ValueError(
+            f"{object_id}: имя v2-отчёта должно оканчиваться на .json"
+        )
+
+    object_report_id = file_name[:-5]
+    if report_info["id"] != object_report_id:
+        raise ValueError(
+            f"{object_id}: ID отчёта {report_info['id']!r} "
+            f"не совпадает с именем объекта {object_report_id!r}"
+        )
+
+
 def validate_task_pallet_assignment(
     s3,
     bucket_id: str,
@@ -290,6 +327,11 @@ def validate_task_pallet_assignment(
     if task.get("reportSchemaVersion") != 2:
         raise ValueError(
             f"{tasks_bucket}/{task_key}: reportSchemaVersion должен быть равен 2"
+        )
+    if task.get("id") != report_info["id"]:
+        raise ValueError(
+            f"{tasks_bucket}/{task_key}: ID задания {task.get('id')!r} "
+            f"не совпадает с ID отчёта {report_info['id']!r}"
         )
 
     raw_assigned = task.get("palletNumbers")
@@ -688,6 +730,7 @@ def handler(event, context):
             )
             report = _read_s3_json(s3, bucket_id, object_id)
             report_info = extract_report_info(report)
+            validate_report_identity(object_id, report_info)
             validate_task_pallet_assignment(s3, bucket_id, report_info)
 
             report_id_for_file = _safe_file_part(report_info["id"])
@@ -710,34 +753,45 @@ def handler(event, context):
                 report_info["pallet_details"]
             ):
                 pallet_number = pallet_info["pallet_number"]
-                label_sent = send_file_message(
-                    token=token,
-                    chat_id=chat_id,
-                    text=(
-                        f"Ярлык паллета {pallet_index + 1}/{pallet_count}\n"
-                        f"Отчёт: {report_info['id']}\n"
-                        f"SSCC: {pallet_number}\n"
-                        f"Коробов: {pallet_info['boxes']}\n"
-                        f"Штук: {pallet_info['products']}"
-                    ),
-                    file_name=(
-                        f"pallet_{pallet_index + 1}_"
-                        f"{pallet_number}.png"
-                    ),
-                    file_bytes=create_pallet_label_image(
-                        report_id=report_info["id"],
-                        pallet_number=pallet_number,
-                        pallet_index=pallet_index,
-                        pallet_count=pallet_count,
-                        boxes_count=pallet_info["boxes"],
-                        products_count=pallet_info["products"],
-                    ),
-                )
-                if not label_sent:
-                    logger.error(
-                        "Pallet label notification failed: report=%s sscc=%s",
+                try:
+                    label_sent = send_file_message(
+                        token=token,
+                        chat_id=chat_id,
+                        text=(
+                            f"Ярлык паллета "
+                            f"{pallet_index + 1}/{pallet_count}\n"
+                            f"Отчёт: {report_info['id']}\n"
+                            f"SSCC: {pallet_number}\n"
+                            f"Коробов: {pallet_info['boxes']}\n"
+                            f"Штук: {pallet_info['products']}"
+                        ),
+                        file_name=(
+                            f"pallet_{pallet_index + 1}_"
+                            f"{pallet_number}.png"
+                        ),
+                        file_bytes=create_pallet_label_image(
+                            report_id=report_info["id"],
+                            pallet_number=pallet_number,
+                            pallet_index=pallet_index,
+                            pallet_count=pallet_count,
+                            boxes_count=pallet_info["boxes"],
+                            products_count=pallet_info["products"],
+                        ),
+                    )
+                    if not label_sent:
+                        logger.error(
+                            "Pallet label notification failed: "
+                            "report=%s sscc=%s",
+                            report_info["id"],
+                            pallet_number,
+                        )
+                except Exception as error:
+                    logger.exception(
+                        "Pallet label notification error: "
+                        "report=%s sscc=%s error=%s",
                         report_info["id"],
                         pallet_number,
+                        error,
                     )
 
         except Exception as error:

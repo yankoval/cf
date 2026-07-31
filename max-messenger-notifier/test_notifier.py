@@ -132,6 +132,16 @@ class TestNotifier(unittest.TestCase):
         self.assertEqual(info["boxes"], 3)
         self.assertEqual(info["products"], 6)
 
+    def test_extract_v2_requires_closed_boxes(self):
+        report = json.loads(json.dumps(self.v2_report))
+        report["readyPallet"][0]["readyBox"][0]["boxAgregate"] = False
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "boxAgregate должен быть true",
+        ):
+            index.extract_report_info(report)
+
     def test_compact_ssccs(self):
         ssccs = [
             "046070517917346246",
@@ -199,6 +209,38 @@ class TestNotifier(unittest.TestCase):
             index.validate_task_pallet_assignment(
                 s3,
                 "bucket",
+                info,
+            )
+
+    def test_task_assignment_rejects_task_id_mismatch(self):
+        s3 = MagicMock()
+        s3.get_object.return_value = self.s3_body(
+            {
+                **self.v2_task,
+                "id": "OTHER-REPORT",
+            }
+        )
+        info = index.extract_report_info(self.v2_report)
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "ID задания 'OTHER-REPORT' не совпадает",
+        ):
+            index.validate_task_pallet_assignment(
+                s3,
+                "bucket",
+                info,
+            )
+
+    def test_validate_report_identity_rejects_v2_file_name_mismatch(self):
+        info = index.extract_report_info(self.v2_report)
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "не совпадает с именем объекта",
+        ):
+            index.validate_report_identity(
+                "equipment-reports/OTHER-REPORT.json",
                 info,
             )
 
@@ -417,6 +459,56 @@ class TestNotifier(unittest.TestCase):
         self.assertEqual(result["statusCode"], 200)
         self.assertEqual(mock_send.call_count, 1)
         mock_create_label.assert_not_called()
+
+    @patch("index.create_pallet_label_image", return_value=b"pallet-png")
+    @patch("index.create_info_image", return_value=b"summary-png")
+    @patch(
+        "index.send_file_message",
+        side_effect=[True, RuntimeError("upload failed"), True],
+    )
+    @patch("index.get_s3_client")
+    def test_handler_continues_labels_after_one_label_exception(
+        self,
+        mock_get_s3,
+        mock_send,
+        mock_create_info,
+        mock_create_label,
+    ):
+        s3 = MagicMock()
+        s3.get_object.side_effect = [
+            self.s3_body(self.v2_report),
+            self.s3_body(self.v2_task),
+        ]
+        mock_get_s3.return_value = s3
+
+        result = index.handler(
+            {
+                "messages": [
+                    {
+                        "details": {
+                            "bucket_id": "bucket",
+                            "object_id": (
+                                "equipment-reports/T-V2-REPORT.json"
+                            ),
+                        }
+                    }
+                ]
+            },
+            None,
+        )
+
+        self.assertEqual(result["statusCode"], 200)
+        self.assertEqual(mock_send.call_count, 3)
+        self.assertEqual(mock_create_info.call_count, 1)
+        self.assertEqual(mock_create_label.call_count, 2)
+        self.assertIn(
+            "SSCC: 046070517921585754",
+            mock_send.call_args_list[1].kwargs["text"],
+        )
+        self.assertIn(
+            "SSCC: 046070517921585761",
+            mock_send.call_args_list[2].kwargs["text"],
+        )
 
     @patch("index.send_file_message", return_value=True)
     @patch("index.get_s3_client")
