@@ -603,6 +603,99 @@ class TestNotifier(unittest.TestCase):
         self.assertTrue(result)
         self.assertEqual(mock_post.call_count, 3)
 
+    @patch("index.time.sleep")
+    @patch("index.requests.post")
+    def test_send_file_message_retries_until_attachment_ready(
+        self,
+        mock_post,
+        mock_sleep,
+    ):
+        init_response = MagicMock()
+        init_response.json.return_value = {"url": "https://upload.example"}
+        upload_response = MagicMock()
+        upload_response.json.return_value = {"token": "file-token"}
+        pending_response = MagicMock()
+        pending_response.status_code = 409
+        pending_response.json.return_value = {
+            "code": "attachment.not.ready",
+        }
+        final_response = MagicMock()
+        final_response.status_code = 200
+        mock_post.side_effect = [
+            init_response,
+            upload_response,
+            pending_response,
+            final_response,
+        ]
+
+        result = index.send_file_message(
+            token="token",
+            chat_id="chat",
+            text="message",
+            file_name="file.png",
+            file_bytes=b"png",
+        )
+
+        self.assertTrue(result)
+        self.assertEqual(mock_post.call_count, 4)
+        mock_sleep.assert_called_once_with(2)
+
+    @patch("index.time.sleep")
+    @patch("index.requests.post")
+    def test_send_file_message_stops_on_terminal_max_error(
+        self,
+        mock_post,
+        mock_sleep,
+    ):
+        init_response = MagicMock()
+        init_response.json.return_value = {"url": "https://upload.example"}
+        upload_response = MagicMock()
+        upload_response.json.return_value = {"token": "file-token"}
+        error_response = MagicMock()
+        error_response.status_code = 400
+        error_response.json.return_value = {"code": "invalid.request"}
+        error_response.text = "invalid request"
+        mock_post.side_effect = [
+            init_response,
+            upload_response,
+            error_response,
+        ]
+
+        result = index.send_file_message(
+            token="token",
+            chat_id="chat",
+            text="message",
+            file_name="file.png",
+            file_bytes=b"png",
+        )
+
+        self.assertFalse(result)
+        self.assertEqual(mock_post.call_count, 3)
+        mock_sleep.assert_not_called()
+
+    @patch("index.requests.post")
+    def test_send_file_message_rejects_upload_without_token(
+        self,
+        mock_post,
+    ):
+        init_response = MagicMock()
+        init_response.json.return_value = {"url": "https://upload.example"}
+        upload_response = MagicMock()
+        upload_response.json.return_value = {}
+        mock_post.side_effect = [init_response, upload_response]
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "MAX не вернул token",
+        ):
+            index.send_file_message(
+                token="token",
+                chat_id="chat",
+                text="message",
+                file_name="file.png",
+                file_bytes=b"png",
+            )
+
 
 if __name__ == "__main__":
     unittest.main()
