@@ -1,3 +1,4 @@
 boto3
 requests
 Pillow
+python-barcode==0.16.1
