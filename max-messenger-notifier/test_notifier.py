@@ -183,6 +183,7 @@ class TestNotifier(unittest.TestCase):
     def test_pallet_label_generation(self):
         png_bytes = index.create_pallet_label_image(
             report_id="T-V2-REPORT",
+            operator="operator-v2",
             pallet_number="046070517921585754",
             pallet_index=0,
             pallet_count=2,
@@ -342,6 +343,10 @@ class TestNotifier(unittest.TestCase):
             mock_send.call_args_list[1].kwargs["text"],
         )
         self.assertIn(
+            "Оператор: operator-v2",
+            mock_send.call_args_list[1].kwargs["text"],
+        )
+        self.assertIn(
             "Коробов: 2",
             mock_send.call_args_list[1].kwargs["text"],
         )
@@ -357,6 +362,7 @@ class TestNotifier(unittest.TestCase):
             [
                 call(
                     report_id="T-V2-REPORT",
+                    operator="operator-v2",
                     pallet_number="046070517921585754",
                     pallet_index=0,
                     pallet_count=2,
@@ -365,6 +371,7 @@ class TestNotifier(unittest.TestCase):
                 ),
                 call(
                     report_id="T-V2-REPORT",
+                    operator="operator-v2",
                     pallet_number="046070517921585761",
                     pallet_index=1,
                     pallet_count=2,

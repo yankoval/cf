@@ -470,6 +470,7 @@ def create_info_image(report_data: Mapping) -> bytes:
 def create_pallet_label_image(
     *,
     report_id: str,
+    operator: str,
     pallet_number: str,
     pallet_index: int,
     pallet_count: int,
@@ -506,12 +507,19 @@ def create_pallet_label_image(
     sscc_font = fonts[32]
     probe = ImageDraw.Draw(Image.new("RGB", (1, 1)))
 
-    report_lines = _wrap_text(
-        probe,
+    detail_lines = []
+    for detail in (
         f"Отчёт: {report_id}",
-        body_font,
-        width - padding * 2,
-    )
+        f"Оператор: {operator}",
+    ):
+        detail_lines.extend(
+            _wrap_text(
+                probe,
+                detail,
+                body_font,
+                width - padding * 2,
+            )
+        )
     count_lines = [
         f"Коробов: {boxes_count}",
         f"Штук: {products_count}",
@@ -521,7 +529,7 @@ def create_pallet_label_image(
         padding
         + 55
         + 25
-        + len(report_lines) * line_height
+        + len(detail_lines) * line_height
         + 25
         + len(count_lines) * line_height
         + 15
@@ -549,7 +557,7 @@ def create_pallet_label_image(
     )
 
     current_y = padding + 80
-    for line in report_lines:
+    for line in detail_lines:
         line_bbox = draw.textbbox((0, 0), line, font=body_font)
         draw.text(
             ((width - (line_bbox[2] - line_bbox[0])) / 2, current_y),
@@ -761,6 +769,7 @@ def handler(event, context):
                             f"Ярлык паллета "
                             f"{pallet_index + 1}/{pallet_count}\n"
                             f"Отчёт: {report_info['id']}\n"
+                            f"Оператор: {report_info['operator']}\n"
                             f"SSCC: {pallet_number}\n"
                             f"Коробов: {pallet_info['boxes']}\n"
                             f"Штук: {pallet_info['products']}"
@@ -771,6 +780,7 @@ def handler(event, context):
                         ),
                         file_bytes=create_pallet_label_image(
                             report_id=report_info["id"],
+                            operator=report_info["operator"],
                             pallet_number=pallet_number,
                             pallet_index=pallet_index,
                             pallet_count=pallet_count,
