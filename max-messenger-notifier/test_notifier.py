@@ -12,6 +12,16 @@ import index
 
 class TestNotifier(unittest.TestCase):
     def setUp(self):
+        self.environment = patch.dict(
+            os.environ,
+            {
+                "MAX_BOT_TOKEN": "test_token",
+                "MAX_CHAT_ID": "test_chat",
+            },
+        )
+        self.environment.start()
+        self.addCleanup(self.environment.stop)
+
         self.v1_report = {
             "id": "T-V1-REPORT",
             "operator": "operator-v1",
@@ -202,8 +212,6 @@ class TestNotifier(unittest.TestCase):
         s3 = MagicMock()
         s3.get_object.return_value = self.s3_body(self.v1_report)
         mock_get_s3.return_value = s3
-        os.environ["MAX_BOT_TOKEN"] = "test_token"
-        os.environ["MAX_CHAT_ID"] = "test_chat"
 
         result = index.handler(
             {
@@ -221,9 +229,31 @@ class TestNotifier(unittest.TestCase):
 
         self.assertEqual(result["statusCode"], 200)
         self.assertEqual(mock_send.call_count, 1)
-        self.assertIn(
-            "Количество коробок: 2",
+        self.assertEqual(
             mock_send.call_args.kwargs["text"],
+            "\n".join(
+                [
+                    "Отчёт оборудования",
+                    "ID: T-V1-REPORT",
+                    "Оператор: operator-v1",
+                    "Количество коробок: 2",
+                    "Количество продуктов: 6",
+                    "Номера коробов: 1513538, 1513559",
+                ]
+            ),
+        )
+        self.assertEqual(
+            mock_send.call_args.kwargs["file_name"],
+            "report_T-V1-REPORT.png",
+        )
+        self.assertTrue(
+            mock_send.call_args.kwargs["file_bytes"].startswith(
+                b"\x89PNG\r\n\x1a\n"
+            )
+        )
+        s3.get_object.assert_called_once_with(
+            Bucket="bucket",
+            Key="equipment-reports/T-V1-REPORT.json",
         )
 
     @patch("index.create_pallet_label_image", return_value=b"pallet-png")
@@ -243,8 +273,6 @@ class TestNotifier(unittest.TestCase):
             self.s3_body(self.v2_task),
         ]
         mock_get_s3.return_value = s3
-        os.environ["MAX_BOT_TOKEN"] = "test_token"
-        os.environ["MAX_CHAT_ID"] = "test_chat"
 
         result = index.handler(
             {
@@ -283,6 +311,26 @@ class TestNotifier(unittest.TestCase):
             "SSCC: 046070517921585761",
             mock_send.call_args_list[2].kwargs["text"],
         )
+        mock_create_label.assert_has_calls(
+            [
+                call(
+                    report_id="T-V2-REPORT",
+                    pallet_number="046070517921585754",
+                    pallet_index=0,
+                    pallet_count=2,
+                    boxes_count=2,
+                    products_count=3,
+                ),
+                call(
+                    report_id="T-V2-REPORT",
+                    pallet_number="046070517921585761",
+                    pallet_index=1,
+                    pallet_count=2,
+                    boxes_count=1,
+                    products_count=3,
+                ),
+            ]
+        )
         s3.get_object.assert_has_calls(
             [
                 call(
@@ -295,6 +343,148 @@ class TestNotifier(unittest.TestCase):
                 ),
             ]
         )
+
+    @patch("index.send_file_message")
+    @patch("index.get_s3_client")
+    def test_handler_rejects_v2_pallet_not_assigned_by_task(
+        self,
+        mock_get_s3,
+        mock_send,
+    ):
+        s3 = MagicMock()
+        s3.get_object.side_effect = [
+            self.s3_body(self.v2_report),
+            self.s3_body(
+                {
+                    **self.v2_task,
+                    "palletNumbers": ["046070517921585778"],
+                }
+            ),
+        ]
+        mock_get_s3.return_value = s3
+
+        result = index.handler(
+            {
+                "messages": [
+                    {
+                        "details": {
+                            "bucket_id": "bucket",
+                            "object_id": (
+                                "equipment-reports/T-V2-REPORT.json"
+                            ),
+                        }
+                    }
+                ]
+            },
+            None,
+        )
+
+        self.assertEqual(result["statusCode"], 200)
+        mock_send.assert_not_called()
+
+    @patch("index.create_pallet_label_image")
+    @patch("index.send_file_message", return_value=False)
+    @patch("index.get_s3_client")
+    def test_handler_does_not_send_labels_when_summary_failed(
+        self,
+        mock_get_s3,
+        mock_send,
+        mock_create_label,
+    ):
+        s3 = MagicMock()
+        s3.get_object.side_effect = [
+            self.s3_body(self.v2_report),
+            self.s3_body(self.v2_task),
+        ]
+        mock_get_s3.return_value = s3
+
+        result = index.handler(
+            {
+                "messages": [
+                    {
+                        "details": {
+                            "bucket_id": "bucket",
+                            "object_id": (
+                                "equipment-reports/T-V2-REPORT.json"
+                            ),
+                        }
+                    }
+                ]
+            },
+            None,
+        )
+
+        self.assertEqual(result["statusCode"], 200)
+        self.assertEqual(mock_send.call_count, 1)
+        mock_create_label.assert_not_called()
+
+    @patch("index.send_file_message", return_value=True)
+    @patch("index.get_s3_client")
+    def test_handler_continues_after_invalid_report_in_same_event(
+        self,
+        mock_get_s3,
+        mock_send,
+    ):
+        invalid_report = {
+            "id": "INVALID",
+            "readyBox": [
+                {
+                    "boxNumber": "046070517915135385",
+                    "productNumbersFull": "not-an-array",
+                }
+            ],
+        }
+        s3 = MagicMock()
+        s3.get_object.side_effect = [
+            self.s3_body(invalid_report),
+            self.s3_body(self.v1_report),
+        ]
+        mock_get_s3.return_value = s3
+
+        result = index.handler(
+            {
+                "messages": [
+                    {
+                        "details": {
+                            "bucket_id": "bucket",
+                            "object_id": (
+                                "equipment-reports/INVALID.json"
+                            ),
+                        }
+                    },
+                    {
+                        "details": {
+                            "bucket_id": "bucket",
+                            "object_id": (
+                                "equipment-reports/T-V1-REPORT.json"
+                            ),
+                        }
+                    },
+                ]
+            },
+            None,
+        )
+
+        self.assertEqual(result["statusCode"], 200)
+        self.assertEqual(mock_send.call_count, 1)
+        self.assertIn(
+            "ID: T-V1-REPORT",
+            mock_send.call_args.kwargs["text"],
+        )
+
+    @patch.dict(os.environ, {}, clear=True)
+    @patch("index.get_s3_client")
+    def test_handler_returns_configuration_error_without_max_settings(
+        self,
+        mock_get_s3,
+    ):
+        result = index.handler({"messages": []}, None)
+
+        self.assertEqual(
+            result,
+            {"statusCode": 500, "body": "Configuration error"},
+        )
+        mock_get_s3.assert_not_called()
 
     @patch("index.requests.post")
     def test_send_file_message_uses_existing_max_protocol(self, mock_post):
