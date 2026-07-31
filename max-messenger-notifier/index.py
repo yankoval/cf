@@ -10,6 +10,7 @@ import boto3
 import requests
 from barcode import get_barcode_class
 from barcode.writer import ImageWriter
+from botocore.exceptions import ClientError
 from PIL import Image, ImageDraw, ImageFont
 
 
@@ -282,6 +283,22 @@ def _read_s3_json(s3, bucket_id: str, object_id: str) -> dict:
     return data
 
 
+def _read_optional_s3_json(s3, bucket_id: str, object_id: str) -> dict | None:
+    """Прочитать JSON, вернув None только если объект не существует."""
+    try:
+        return _read_s3_json(s3, bucket_id, object_id)
+    except ClientError as error:
+        response = error.response or {}
+        error_data = response.get("Error", {})
+        metadata = response.get("ResponseMetadata", {})
+        if (
+            error_data.get("Code") in {"NoSuchKey", "NotFound", "404"}
+            or metadata.get("HTTPStatusCode") == 404
+        ):
+            return None
+        raise
+
+
 def validate_report_identity(
     object_id: str,
     report_info: Mapping,
@@ -308,10 +325,8 @@ def validate_task_pallet_assignment(
     s3,
     bucket_id: str,
     report_info: Mapping,
-) -> None:
-    """Сверить паллеты v2 с заранее назначенными SSCC задания."""
-    if report_info["schema_version"] != 2:
-        return
+) -> dict:
+    """Сверить SSCC с заданием и дополнить паллетом отчёт v1."""
 
     tasks_prefix = os.environ.get(
         "EQUIPMENT_TASKS_PREFIX",
@@ -322,19 +337,49 @@ def validate_task_pallet_assignment(
         bucket_id,
     )
     task_key = f"{tasks_prefix}/{report_info['id']}.json"
-    task = _read_s3_json(s3, tasks_bucket, task_key)
+    task = _read_optional_s3_json(s3, tasks_bucket, task_key)
 
-    if task.get("reportSchemaVersion") != 2:
-        raise ValueError(
-            f"{tasks_bucket}/{task_key}: reportSchemaVersion должен быть равен 2"
+    if task is None:
+        if report_info["schema_version"] == 2:
+            raise ValueError(
+                f"{tasks_bucket}/{task_key}: задание не найдено"
+            )
+        logger.info(
+            "Legacy v1 report %s has no equipment task; "
+            "sending summary without pallet label",
+            report_info["id"],
         )
+        return dict(report_info)
+
+    raw_assigned = task.get("palletNumbers")
+    task_schema_version = task.get("reportSchemaVersion")
+
     if task.get("id") != report_info["id"]:
         raise ValueError(
             f"{tasks_bucket}/{task_key}: ID задания {task.get('id')!r} "
             f"не совпадает с ID отчёта {report_info['id']!r}"
         )
 
-    raw_assigned = task.get("palletNumbers")
+    # Старые задания не содержали признаков паллетной агрегации. Для них
+    # сохраняем прежний формат уведомления v1 без ярлыка.
+    if (
+        report_info["schema_version"] == 1
+        and task_schema_version in (None, 1)
+        and raw_assigned in (None, [])
+    ):
+        logger.info(
+            "Legacy v1 task %s has no palletNumbers; "
+            "sending summary without pallet label",
+            task_key,
+        )
+        return dict(report_info)
+
+    if task_schema_version != report_info["schema_version"]:
+        raise ValueError(
+            f"{tasks_bucket}/{task_key}: reportSchemaVersion должен быть "
+            f"равен {report_info['schema_version']}"
+        )
+
     if not isinstance(raw_assigned, list) or not raw_assigned:
         raise ValueError(
             f"{tasks_bucket}/{task_key}: "
@@ -350,6 +395,29 @@ def validate_task_pallet_assignment(
             f"{tasks_bucket}/{task_key}: palletNumbers содержит дубли"
         )
 
+    if report_info["schema_version"] == 1:
+        if len(raw_assigned) != 1:
+            raise ValueError(
+                f"{tasks_bucket}/{task_key}: для отчёта v1 должен быть "
+                "назначен ровно один palletNumbers"
+            )
+        pallet_number = next(iter(assigned))
+        enriched = dict(report_info)
+        enriched.update(
+            {
+                "pallets": 1,
+                "pallet_numbers": [pallet_number],
+                "pallet_details": [
+                    {
+                        "pallet_number": pallet_number,
+                        "boxes": report_info["boxes"],
+                        "products": report_info["products"],
+                    }
+                ],
+            }
+        )
+        return enriched
+
     report_numbers = report_info["pallet_numbers"]
     if len(set(report_numbers)) != len(report_numbers):
         raise ValueError("Отчёт содержит повторяющийся SSCC паллета")
@@ -358,6 +426,7 @@ def validate_task_pallet_assignment(
             raise ValueError(
                 f"Паллет {pallet_number} не назначен в {task_key}"
             )
+    return dict(report_info)
 
 
 def _get_fonts():
@@ -739,7 +808,20 @@ def handler(event, context):
             report = _read_s3_json(s3, bucket_id, object_id)
             report_info = extract_report_info(report)
             validate_report_identity(object_id, report_info)
-            validate_task_pallet_assignment(s3, bucket_id, report_info)
+            report_info = validate_task_pallet_assignment(
+                s3,
+                bucket_id,
+                report_info,
+            )
+            logger.info(
+                "Validated report %s: schema=v%s pallets=%s boxes=%s "
+                "products=%s",
+                report_info["id"],
+                report_info["schema_version"],
+                report_info["pallets"],
+                report_info["boxes"],
+                report_info["products"],
+            )
 
             report_id_for_file = _safe_file_part(report_info["id"])
             summary_sent = send_file_message(

@@ -5,6 +5,8 @@ import sys
 import unittest
 from unittest.mock import MagicMock, call, patch
 
+from botocore.exceptions import ClientError
+
 
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 import index
@@ -86,12 +88,27 @@ class TestNotifier(unittest.TestCase):
                 "046070517921585778",
             ],
         }
+        self.v1_task = {
+            "id": "T-V1-REPORT",
+            "reportSchemaVersion": 1,
+            "palletNumbers": ["046070517921585754"],
+        }
 
     @staticmethod
     def s3_body(data):
         body = MagicMock()
         body.read.return_value = json.dumps(data).encode("utf-8")
         return {"Body": body}
+
+    @staticmethod
+    def missing_s3_object():
+        return ClientError(
+            {
+                "Error": {"Code": "NoSuchKey", "Message": "Not Found"},
+                "ResponseMetadata": {"HTTPStatusCode": 404},
+            },
+            "GetObject",
+        )
 
     def test_extract_v1_report_info(self):
         info = index.extract_report_info(self.v1_report)
@@ -247,13 +264,16 @@ class TestNotifier(unittest.TestCase):
 
     @patch("index.send_file_message", return_value=True)
     @patch("index.get_s3_client")
-    def test_handler_v1_keeps_one_summary_message(
+    def test_handler_legacy_v1_task_keeps_one_summary_message(
         self,
         mock_get_s3,
         mock_send,
     ):
         s3 = MagicMock()
-        s3.get_object.return_value = self.s3_body(self.v1_report)
+        s3.get_object.side_effect = [
+            self.s3_body(self.v1_report),
+            self.s3_body({"id": "T-V1-REPORT"}),
+        ]
         mock_get_s3.return_value = s3
 
         result = index.handler(
@@ -294,10 +314,124 @@ class TestNotifier(unittest.TestCase):
                 b"\x89PNG\r\n\x1a\n"
             )
         )
-        s3.get_object.assert_called_once_with(
-            Bucket="bucket",
-            Key="equipment-reports/T-V1-REPORT.json",
+        s3.get_object.assert_has_calls(
+            [
+                call(
+                    Bucket="bucket",
+                    Key="equipment-reports/T-V1-REPORT.json",
+                ),
+                call(
+                    Bucket="bucket",
+                    Key="equipment-tasks/T-V1-REPORT.json",
+                ),
+            ]
         )
+
+    @patch("index.create_pallet_label_image", return_value=b"pallet-png")
+    @patch("index.create_info_image", return_value=b"summary-png")
+    @patch("index.send_file_message", return_value=True)
+    @patch("index.get_s3_client")
+    def test_handler_v1_new_task_sends_single_pallet_label(
+        self,
+        mock_get_s3,
+        mock_send,
+        mock_create_info,
+        mock_create_label,
+    ):
+        s3 = MagicMock()
+        s3.get_object.side_effect = [
+            self.s3_body(self.v1_report),
+            self.s3_body(self.v1_task),
+        ]
+        mock_get_s3.return_value = s3
+
+        result = index.handler(
+            {
+                "messages": [
+                    {
+                        "details": {
+                            "bucket_id": "bucket",
+                            "object_id": "equipment-reports/T-V1-REPORT.json",
+                        }
+                    }
+                ]
+            },
+            None,
+        )
+
+        self.assertEqual(result["statusCode"], 200)
+        self.assertEqual(mock_send.call_count, 2)
+        self.assertIn(
+            "Количество паллетов: 1",
+            mock_send.call_args_list[0].kwargs["text"],
+        )
+        self.assertIn(
+            "SSCC: 046070517921585754",
+            mock_send.call_args_list[1].kwargs["text"],
+        )
+        mock_create_label.assert_called_once_with(
+            report_id="T-V1-REPORT",
+            operator="operator-v1",
+            pallet_number="046070517921585754",
+            pallet_index=0,
+            pallet_count=1,
+            boxes_count=2,
+            products_count=6,
+        )
+
+    @patch("index.send_file_message", return_value=True)
+    @patch("index.get_s3_client")
+    def test_handler_v1_without_task_keeps_legacy_summary(
+        self,
+        mock_get_s3,
+        mock_send,
+    ):
+        s3 = MagicMock()
+        s3.get_object.side_effect = [
+            self.s3_body(self.v1_report),
+            self.missing_s3_object(),
+        ]
+        mock_get_s3.return_value = s3
+
+        result = index.handler(
+            {
+                "messages": [
+                    {
+                        "details": {
+                            "bucket_id": "bucket",
+                            "object_id": "equipment-reports/T-V1-REPORT.json",
+                        }
+                    }
+                ]
+            },
+            None,
+        )
+
+        self.assertEqual(result["statusCode"], 200)
+        self.assertEqual(mock_send.call_count, 1)
+        self.assertNotIn(
+            "Количество паллетов",
+            mock_send.call_args.kwargs["text"],
+        )
+
+    def test_task_assignment_rejects_multiple_pallets_for_v1(self):
+        s3 = MagicMock()
+        s3.get_object.return_value = self.s3_body(
+            {
+                **self.v1_task,
+                "palletNumbers": [
+                    "046070517921585754",
+                    "046070517921585761",
+                ],
+            }
+        )
+
+        with self.assertRaisesRegex(ValueError, "ровно один"):
+            index.validate_task_pallet_assignment(
+                s3,
+                "bucket",
+                index.extract_report_info(self.v1_report),
+            )
 
     @patch("index.create_pallet_label_image", return_value=b"pallet-png")
     @patch("index.create_info_image", return_value=b"summary-png")
@@ -537,6 +671,7 @@ class TestNotifier(unittest.TestCase):
         s3.get_object.side_effect = [
             self.s3_body(invalid_report),
             self.s3_body(self.v1_report),
+            self.s3_body({"id": "T-V1-REPORT"}),
         ]
         mock_get_s3.return_value = s3
 
