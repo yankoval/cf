@@ -172,16 +172,21 @@ def get_report_boxes(report: Mapping) -> tuple[Mapping, ...]:
     return tuple(boxes)
 
 
-def compact_report_boxes(report: Mapping) -> str:
-    """Сформировать компактный перечень коробов отчёта v1/v2."""
+def compact_box_numbers(boxes: Iterable[Mapping]) -> str:
+    """Сформировать компактный перечень SSCC переданных коробов."""
     try:
         return compact_ssccs(
             box["boxNumber"]
-            for box in get_report_boxes(report)
+            for box in boxes
             if box.get("boxNumber")
         )
     except ValueError:
         return "—"
+
+
+def compact_report_boxes(report: Mapping) -> str:
+    """Сформировать компактный перечень коробов отчёта v1/v2."""
+    return compact_box_numbers(get_report_boxes(report))
 
 
 def extract_report_info(report: Mapping) -> dict:
@@ -241,6 +246,7 @@ def extract_report_info(report: Mapping) -> dict:
                 "pallet_number": pallet_number,
                 "boxes": len(pallet_boxes),
                 "products": pallet_products,
+                "ssccs": compact_box_numbers(pallet_boxes),
             }
         )
 
@@ -412,6 +418,7 @@ def validate_task_pallet_assignment(
                         "pallet_number": pallet_number,
                         "boxes": report_info["boxes"],
                         "products": report_info["products"],
+                        "ssccs": report_info["ssccs"],
                     }
                 ],
             }
@@ -844,18 +851,23 @@ def handler(event, context):
             ):
                 pallet_number = pallet_info["pallet_number"]
                 try:
+                    label_text_lines = [
+                        f"Ярлык паллета "
+                        f"{pallet_index + 1}/{pallet_count}",
+                        f"Отчёт: {report_info['id']}",
+                        f"Оператор: {report_info['operator']}",
+                        f"SSCC: {pallet_number}",
+                        f"Коробов: {pallet_info['boxes']}",
+                        f"Штук: {pallet_info['products']}",
+                    ]
+                    if pallet_info.get("ssccs"):
+                        label_text_lines.append(
+                            f"Номера коробов: {pallet_info['ssccs']}"
+                        )
                     label_sent = send_file_message(
                         token=token,
                         chat_id=chat_id,
-                        text=(
-                            f"Ярлык паллета "
-                            f"{pallet_index + 1}/{pallet_count}\n"
-                            f"Отчёт: {report_info['id']}\n"
-                            f"Оператор: {report_info['operator']}\n"
-                            f"SSCC: {pallet_number}\n"
-                            f"Коробов: {pallet_info['boxes']}\n"
-                            f"Штук: {pallet_info['products']}"
-                        ),
+                        text="\n".join(label_text_lines),
                         file_name=(
                             f"pallet_{pallet_index + 1}_"
                             f"{pallet_number}.png"

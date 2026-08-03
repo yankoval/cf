@@ -138,11 +138,13 @@ class TestNotifier(unittest.TestCase):
                     "pallet_number": "046070517921585754",
                     "boxes": 2,
                     "products": 3,
+                    "ssccs": "1513538, 1513559",
                 },
                 {
                     "pallet_number": "046070517921585761",
                     "boxes": 1,
                     "products": 3,
+                    "ssccs": "1513560",
                 },
             ],
         )
@@ -369,6 +371,10 @@ class TestNotifier(unittest.TestCase):
             "SSCC: 046070517921585754",
             mock_send.call_args_list[1].kwargs["text"],
         )
+        self.assertIn(
+            "Номера коробов: 1513538, 1513559",
+            mock_send.call_args_list[1].kwargs["text"],
+        )
         mock_create_label.assert_called_once_with(
             report_id="T-V1-REPORT",
             operator="operator-v1",
@@ -489,7 +495,15 @@ class TestNotifier(unittest.TestCase):
             mock_send.call_args_list[1].kwargs["text"],
         )
         self.assertIn(
+            "Номера коробов: 1513538, 1513559",
+            mock_send.call_args_list[1].kwargs["text"],
+        )
+        self.assertIn(
             "SSCC: 046070517921585761",
+            mock_send.call_args_list[2].kwargs["text"],
+        )
+        self.assertIn(
+            "Номера коробов: 1513560",
             mock_send.call_args_list[2].kwargs["text"],
         )
         mock_create_label.assert_has_calls(
