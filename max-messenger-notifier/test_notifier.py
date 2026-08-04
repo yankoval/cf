@@ -330,14 +330,12 @@ class TestNotifier(unittest.TestCase):
         )
 
     @patch("index.create_pallet_label_image", return_value=b"pallet-png")
-    @patch("index.create_info_image", return_value=b"summary-png")
     @patch("index.send_file_message", return_value=True)
     @patch("index.get_s3_client")
     def test_handler_v1_new_task_sends_single_pallet_label(
         self,
         mock_get_s3,
         mock_send,
-        mock_create_info,
         mock_create_label,
     ):
         s3 = MagicMock()
@@ -362,18 +360,14 @@ class TestNotifier(unittest.TestCase):
         )
 
         self.assertEqual(result["statusCode"], 200)
-        self.assertEqual(mock_send.call_count, 2)
-        self.assertIn(
-            "Количество паллетов: 1",
-            mock_send.call_args_list[0].kwargs["text"],
-        )
+        self.assertEqual(mock_send.call_count, 1)
         self.assertIn(
             "SSCC: 046070517921585754",
-            mock_send.call_args_list[1].kwargs["text"],
+            mock_send.call_args.kwargs["text"],
         )
         self.assertIn(
             "Номера коробов: 1513538, 1513559",
-            mock_send.call_args_list[1].kwargs["text"],
+            mock_send.call_args.kwargs["text"],
         )
         mock_create_label.assert_called_once_with(
             report_id="T-V1-REPORT",
@@ -440,14 +434,12 @@ class TestNotifier(unittest.TestCase):
             )
 
     @patch("index.create_pallet_label_image", return_value=b"pallet-png")
-    @patch("index.create_info_image", return_value=b"summary-png")
     @patch("index.send_file_message", return_value=True)
     @patch("index.get_s3_client")
-    def test_handler_v2_sends_summary_and_one_label_per_pallet(
+    def test_handler_v2_sends_only_one_label_per_pallet(
         self,
         mock_get_s3,
         mock_send,
-        mock_create_info,
         mock_create_label,
     ):
         s3 = MagicMock()
@@ -472,39 +464,35 @@ class TestNotifier(unittest.TestCase):
         )
 
         self.assertEqual(result["statusCode"], 200)
-        self.assertEqual(mock_send.call_count, 3)
+        self.assertEqual(mock_send.call_count, 2)
         self.assertEqual(mock_create_label.call_count, 2)
         self.assertIn(
-            "Количество паллетов: 2",
+            "SSCC: 046070517921585754",
             mock_send.call_args_list[0].kwargs["text"],
         )
         self.assertIn(
-            "SSCC: 046070517921585754",
-            mock_send.call_args_list[1].kwargs["text"],
-        )
-        self.assertIn(
             "Оператор: operator-v2",
-            mock_send.call_args_list[1].kwargs["text"],
+            mock_send.call_args_list[0].kwargs["text"],
         )
         self.assertIn(
             "Коробов: 2",
-            mock_send.call_args_list[1].kwargs["text"],
+            mock_send.call_args_list[0].kwargs["text"],
         )
         self.assertIn(
             "Штук: 3",
-            mock_send.call_args_list[1].kwargs["text"],
+            mock_send.call_args_list[0].kwargs["text"],
         )
         self.assertIn(
             "Номера коробов: 1513538, 1513559",
-            mock_send.call_args_list[1].kwargs["text"],
+            mock_send.call_args_list[0].kwargs["text"],
         )
         self.assertIn(
             "SSCC: 046070517921585761",
-            mock_send.call_args_list[2].kwargs["text"],
+            mock_send.call_args_list[1].kwargs["text"],
         )
         self.assertIn(
             "Номера коробов: 1513560",
-            mock_send.call_args_list[2].kwargs["text"],
+            mock_send.call_args_list[1].kwargs["text"],
         )
         mock_create_label.assert_has_calls(
             [
@@ -582,7 +570,7 @@ class TestNotifier(unittest.TestCase):
     @patch("index.create_pallet_label_image")
     @patch("index.send_file_message", return_value=False)
     @patch("index.get_s3_client")
-    def test_handler_does_not_send_labels_when_summary_failed(
+    def test_handler_legacy_v1_summary_failure_does_not_create_label(
         self,
         mock_get_s3,
         mock_send,
@@ -590,8 +578,8 @@ class TestNotifier(unittest.TestCase):
     ):
         s3 = MagicMock()
         s3.get_object.side_effect = [
-            self.s3_body(self.v2_report),
-            self.s3_body(self.v2_task),
+            self.s3_body(self.v1_report),
+            self.s3_body({"id": "T-V1-REPORT"}),
         ]
         mock_get_s3.return_value = s3
 
@@ -602,7 +590,7 @@ class TestNotifier(unittest.TestCase):
                         "details": {
                             "bucket_id": "bucket",
                             "object_id": (
-                                "equipment-reports/T-V2-REPORT.json"
+                                "equipment-reports/T-V1-REPORT.json"
                             ),
                         }
                     }
@@ -616,17 +604,15 @@ class TestNotifier(unittest.TestCase):
         mock_create_label.assert_not_called()
 
     @patch("index.create_pallet_label_image", return_value=b"pallet-png")
-    @patch("index.create_info_image", return_value=b"summary-png")
     @patch(
         "index.send_file_message",
-        side_effect=[True, RuntimeError("upload failed"), True],
+        side_effect=[RuntimeError("upload failed"), True],
     )
     @patch("index.get_s3_client")
     def test_handler_continues_labels_after_one_label_exception(
         self,
         mock_get_s3,
         mock_send,
-        mock_create_info,
         mock_create_label,
     ):
         s3 = MagicMock()
@@ -653,16 +639,15 @@ class TestNotifier(unittest.TestCase):
         )
 
         self.assertEqual(result["statusCode"], 200)
-        self.assertEqual(mock_send.call_count, 3)
-        self.assertEqual(mock_create_info.call_count, 1)
+        self.assertEqual(mock_send.call_count, 2)
         self.assertEqual(mock_create_label.call_count, 2)
         self.assertIn(
             "SSCC: 046070517921585754",
-            mock_send.call_args_list[1].kwargs["text"],
+            mock_send.call_args_list[0].kwargs["text"],
         )
         self.assertIn(
             "SSCC: 046070517921585761",
-            mock_send.call_args_list[2].kwargs["text"],
+            mock_send.call_args_list[1].kwargs["text"],
         )
 
     @patch("index.send_file_message", return_value=True)

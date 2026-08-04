@@ -830,19 +830,24 @@ def handler(event, context):
                 report_info["products"],
             )
 
-            report_id_for_file = _safe_file_part(report_info["id"])
-            summary_sent = send_file_message(
-                token=token,
-                chat_id=chat_id,
-                text=build_message_text(report_info),
-                file_name=f"report_{report_id_for_file}.png",
-                file_bytes=create_info_image(report_info),
-            )
-            if not summary_sent:
-                logger.error(
-                    "Summary notification failed for report %s",
-                    report_info["id"],
+            # Исторический v1 не имеет назначенного паллета, поэтому для него
+            # сохраняется прежняя сводка. Паллетизированный отчёт не должен
+            # дублироваться сводкой: вся необходимая информация уже входит в
+            # сообщение с этикеткой каждого паллета.
+            if not report_info["pallet_details"]:
+                report_id_for_file = _safe_file_part(report_info["id"])
+                summary_sent = send_file_message(
+                    token=token,
+                    chat_id=chat_id,
+                    text=build_message_text(report_info),
+                    file_name=f"report_{report_id_for_file}.png",
+                    file_bytes=create_info_image(report_info),
                 )
+                if not summary_sent:
+                    logger.error(
+                        "Summary notification failed for report %s",
+                        report_info["id"],
+                    )
                 continue
 
             pallet_count = report_info["pallets"]
