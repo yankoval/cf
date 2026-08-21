@@ -58,16 +58,19 @@ def _s3_access_policy(settings: Settings) -> dict[str, Any]:
         "Statement": [
             {
                 "Effect": "Allow",
+                "Principal": "*",
                 "Action": "s3:ListBucket",
                 "Resource": f"arn:aws:s3:::{bucket}",
             },
             {
                 "Effect": "Allow",
+                "Principal": "*",
                 "Action": "s3:GetObject",
                 "Resource": sorted(set(read_resources)),
             },
             {
                 "Effect": "Allow",
+                "Principal": "*",
                 "Action": "s3:PutObject",
                 "Resource": [
                     object_arn + settings.output_prefix + "*",
