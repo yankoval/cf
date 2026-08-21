@@ -17,7 +17,7 @@ class Settings:
     output_prefix: str = "printer-tasks/"
     done_prefix: str = "_prnsrv/done/"
     templates_bucket: str | None = None
-    templates_prefix: str = "printer-templates/"
+    templates_prefix: str = "config/templates/"
     mapping_key: str | None = None
     column_name: str = "C1"
     windows_csv_dir: str = r"C:\tmp"
@@ -38,7 +38,7 @@ class Settings:
             output_prefix=_prefix(os.getenv("OUTPUT_PREFIX", "printer-tasks/")),
             done_prefix=_prefix(os.getenv("DONE_PREFIX", "_prnsrv/done/")),
             templates_bucket=os.getenv("TEMPLATES_BUCKET"),
-            templates_prefix=_prefix(os.getenv("TEMPLATES_PREFIX", "printer-templates/")),
+            templates_prefix=_prefix(os.getenv("TEMPLATES_PREFIX", "config/templates/")),
             mapping_key=os.getenv("MAPPING_KEY") or None,
             column_name=os.getenv("COLUMN_NAME", "C1"),
             windows_csv_dir=os.getenv("WINDOWS_CSV_DIR", r"C:\tmp"),

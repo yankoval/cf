@@ -28,7 +28,7 @@ Yandex Cloud Function, заменяющая polling-обработчик `prnsrv
 | `OUTPUT_PREFIX` | Нет | `printer-tasks/` |
 | `DONE_PREFIX` | Нет | `_prnsrv/done/` |
 | `TEMPLATES_BUCKET` | Нет | bucket исходного задания |
-| `TEMPLATES_PREFIX` | Нет | `printer-templates/` |
+| `TEMPLATES_PREFIX` | Нет | `config/templates/` |
 | `MAPPING_KEY` | Нет | bundled mapping из пакета `prnsrv` |
 | `SSCC_URL` | Для `count > 0` | — |
 | `SSCC_PREFIX` | Нет | `460705179` |
