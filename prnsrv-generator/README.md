@@ -30,7 +30,7 @@ Yandex Cloud Function, заменяющая polling-обработчик `prnsrv
 | `TEMPLATES_BUCKET` | Нет | bucket исходного задания |
 | `TEMPLATES_PREFIX` | Нет | `config/templates/` |
 | `MAPPING_KEY` | Нет | bundled mapping из пакета `prnsrv` |
-| `SSCC_URL` | Для `count > 0` | — |
+| `SSCC_URL` | Нет; переопределяется только для изолированного CT | `sscc-generator-ci` (`d4et2pvmtgp0oo5pk0bh`) |
 | `SSCC_PREFIX` | Нет | `460705179` |
 | `SSCC_EXTENSION` | Нет | `0` |
 | `SSCC_TIMEOUT_SECONDS` | Нет | `15` |
@@ -43,6 +43,10 @@ Yandex Cloud Function, заменяющая polling-обработчик `prnsrv
 | `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY` | Если SDK не получает credentials иным способом | — |
 
 Секреты не должны попадать в ZIP или Git. Для production они передаются через Lockbox/переменные версии функции.
+
+Production-генератор всегда выдаёт новые диапазоны через существующую
+`sscc-generator-ci`. Отдельная `sscc-generator` в этой миграции не вызывается.
+Переопределение `SSCC_URL` нужно только для изолированного CT-контура.
 
 ## Шаблоны
 
