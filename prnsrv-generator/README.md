@@ -47,6 +47,11 @@ Yandex Cloud Function, заменяющая polling-обработчик `prnsrv
 URL аллокатора не зашивается в Python-код. В production `SSCC_URL` указывает на
 `sscc-generator`, в тестовом контуре — на `sscc-generator-ci`.
 
+Если allocator закрыт, версии `prnsrv-generator` назначается service account с
+ролью `functions.functionInvoker` на целевой SSCC-функции. Адаптер берёт
+краткоживущий IAM token из `context.token` и передаёт его только в заголовке
+`Authorization`; token не хранится в env/done и не попадает в structured logs.
+
 ## Шаблоны
 
 VDF-шаблон читается из:
