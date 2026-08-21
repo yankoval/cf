@@ -108,9 +108,9 @@ class FakeAllocator:
         self.allocations = {}
         self._lock = threading.Lock()
 
-    def allocate(self, *, job_uuid, source_hash, count):
+    def allocate(self, *, job_uuid, source_hash, count, auth_token=None):
         with self._lock:
-            self.calls.append((job_uuid, source_hash, count))
+            self.calls.append((job_uuid, source_hash, count, auth_token))
             existing = self.allocations.get(job_uuid)
             if existing is not None:
                 if existing[0] != source_hash or len(existing[1].ssccs) != count:

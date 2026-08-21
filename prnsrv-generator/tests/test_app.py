@@ -6,6 +6,7 @@ import unittest
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 
 from app import PrnsrvFunction
 from config import Settings
@@ -184,6 +185,28 @@ class PrnsrvFunctionTests(unittest.TestCase):
         )
         self.assertEqual(200, response["statusCode"])
         self.assertIn((BUCKET, f"_prnsrv/done/{job_uuid}.done"), self.client.objects)
+
+    def test_context_iam_token_is_forwarded_only_to_allocator(self):
+        job_uuid, key = self.seed_source(self.printable(1))
+        with self.assertLogs("prnsrv_generator", level="INFO") as logs:
+            response = self.app.handle(
+                {
+                    "messages": [
+                        {
+                            "event_metadata": {"event_id": "event-iam"},
+                            "details": {"bucket_id": BUCKET, "object_id": key},
+                        }
+                    ]
+                },
+                SimpleNamespace(
+                    request_id="request-iam",
+                    token={"access_token": "short-lived-iam-token"},
+                ),
+            )
+
+        self.assertEqual(200, response["statusCode"])
+        self.assertEqual("short-lived-iam-token", self.allocator.calls[0][3])
+        self.assertNotIn("short-lived-iam-token", "\n".join(logs.output))
 
     def test_reconciliation_classifies_no_print_and_missing_vdf(self):
         no_print_uuid, _ = self.seed_source({"count": ""})

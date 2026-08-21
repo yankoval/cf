@@ -47,6 +47,17 @@ def _isoformat(value: datetime) -> str:
     return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
+def _context_access_token(context: Any) -> str | None:
+    token_data = getattr(context, "token", None)
+    if token_data is None and isinstance(context, Mapping):
+        token_data = context.get("token")
+    if isinstance(token_data, Mapping):
+        token = token_data.get("access_token")
+    else:
+        token = getattr(token_data, "access_token", None)
+    return str(token) if token else None
+
+
 def _log(level: int, event: str, **fields: Any) -> None:
     LOGGER.log(
         level,
@@ -214,7 +225,14 @@ class PrnsrvFunction:
             if not self._markers_equivalent(existing, marker):
                 raise ImmutableObjectConflict("Concurrent done marker has different content")
 
-    def process_object(self, *, bucket: str, key: str, event_id: str | None = None) -> dict[str, Any]:
+    def process_object(
+        self,
+        *,
+        bucket: str,
+        key: str,
+        event_id: str | None = None,
+        sscc_auth_token: str | None = None,
+    ) -> dict[str, Any]:
         if self.settings.bucket_id and bucket != self.settings.bucket_id:
             raise InputValidationError("Event bucket does not match BUCKET_ID")
 
@@ -267,10 +285,15 @@ class PrnsrvFunction:
         template_name = resolve_template_name(source)
         template_bytes = self._load_template(bucket, template_name)
         mapping_items = self._load_mapping(bucket)
+        allocation_args: dict[str, Any] = {
+            "job_uuid": job_uuid,
+            "source_hash": source_hash,
+            "count": count_decision.count,
+        }
+        if sscc_auth_token:
+            allocation_args["auth_token"] = sscc_auth_token
         allocation = self._allocator_client().allocate(
-            job_uuid=job_uuid,
-            source_hash=source_hash,
-            count=count_decision.count,
+            **allocation_args,
         )
         csv_bytes = build_csv(
             allocation.ssccs,
@@ -449,7 +472,8 @@ class PrnsrvFunction:
         return result
 
     def handle(self, event: Mapping[str, Any], context: Any = None) -> dict[str, Any]:
-        request_id = getattr(context, "request_id", None) or getattr(context, "token", None)
+        request_id = getattr(context, "request_id", None)
+        sscc_auth_token = _context_access_token(context)
         object_events: list[tuple[str, str, str | None]] = []
         for message in event.get("messages", []) if isinstance(event, Mapping) else []:
             if not isinstance(message, Mapping):
@@ -467,7 +491,12 @@ class PrnsrvFunction:
 
         if object_events:
             results = [
-                self.process_object(bucket=bucket, key=key, event_id=event_id or None)
+                self.process_object(
+                    bucket=bucket,
+                    key=key,
+                    event_id=event_id or None,
+                    sscc_auth_token=sscc_auth_token,
+                )
                 for bucket, key, event_id in object_events
             ]
             return {"statusCode": 200, "body": json.dumps({"results": results})}
