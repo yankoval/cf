@@ -17,7 +17,7 @@ FUNCTION_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_PRNSRV_SOURCE = FUNCTION_ROOT.parents[1] / "prnsrv"
 DEFAULT_PRNSRV_REQUIREMENT = (
     "git+https://github.com/yankoval/prnsrv.git"
-    "@d4188601809aa9e42df5448ad5e59997fbda9b90"
+    "@57d7b9a36bb6100f5c5dd5beed46ebd2f0575f38"
 )
 APPLICATION_FILES = ("index.py", "app.py", "config.py", "storage.py")
 
