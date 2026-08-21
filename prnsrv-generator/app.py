@@ -382,6 +382,8 @@ class PrnsrvFunction:
             raise RuntimeError("BUCKET_ID is required for timer reconciliation")
         now = self.now()
         recent_boundary = now - timedelta(hours=self.settings.reconcile_hours)
+        if self.settings.reconcile_not_before is not None:
+            recent_boundary = max(recent_boundary, self.settings.reconcile_not_before)
         stale_boundary = now - timedelta(hours=self.settings.stale_after_hours)
 
         recent_inputs: dict[str, str] = {}

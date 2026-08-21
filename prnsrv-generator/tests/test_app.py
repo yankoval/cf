@@ -225,6 +225,29 @@ class PrnsrvFunctionTests(unittest.TestCase):
         self.assertEqual(1, counts["VDF_MISSING"])
         self.assertNotIn((BUCKET, f"_prnsrv/done/{no_print_uuid}.done"), self.client.objects)
 
+    def test_reconciliation_ignores_inputs_before_cutover_boundary(self):
+        old_uuid, _ = self.seed_source({"count": ""}, age_hours=2)
+        new_uuid, _ = self.seed_source({"count": ""}, age_hours=1.25)
+        settings = Settings(
+            bucket_id=BUCKET,
+            templates_prefix="templates/",
+            mapping_key="config/mapping.json",
+            reconcile_not_before=FIXED_NOW - timedelta(hours=1.5),
+        )
+        app = PrnsrvFunction(
+            storage=self.storage,
+            settings=settings,
+            allocator=self.allocator,
+            now=lambda: FIXED_NOW,
+        )
+
+        counts = app.reconcile(bucket=BUCKET, run_id="timer-cutover")
+
+        self.assertEqual(1, counts["RECENT_INPUT"])
+        self.assertEqual(1, counts["CANDIDATE"])
+        self.assertEqual(1, counts["NO_PRINT_MARKER_MISSING"])
+        self.assertNotEqual(old_uuid, new_uuid)
+
 
 if __name__ == "__main__":
     unittest.main()

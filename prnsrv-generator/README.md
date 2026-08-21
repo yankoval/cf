@@ -37,6 +37,7 @@ Yandex Cloud Function, заменяющая polling-обработчик `prnsrv
 | `COLUMN_NAME` | Нет | `C1` |
 | `WINDOWS_CSV_DIR` | Нет | `C:\tmp` |
 | `RECONCILE_HOURS` | Нет | `48` |
+| `RECONCILE_NOT_BEFORE` | Нет | — |
 | `STALE_AFTER_HOURS` | Нет | `1` |
 | `S3_ENDPOINT` | Нет | `https://storage.yandexcloud.net` |
 | `AWS_REGION` | Нет | `ru-central1` |
@@ -65,6 +66,8 @@ s3://<TEMPLATES_BUCKET>/<TEMPLATES_PREFIX><PasportData.Format>.vdf
 ## Ежедневная сверка
 
 Timer trigger вызывает тот же handler без Object Storage details. Функция один раз выполняет LIST `Задания/`, оставляет задания за последние 48 часов старше одного часа и вычитает LIST `_prnsrv/done/`.
+
+При миграции с legacy-обработчика `RECONCILE_NOT_BEFORE` задаётся как RFC 3339 timestamp с timezone, например `2026-08-21T15:58:00Z`. Входы старше этой границы не считаются зависшими заданиями нового контура.
 
 Результат существует только в structured logs/metrics. Автоматического replay и S3 report object нет. Lifecycle `Expiration: 2 days` настраивается только для `_prnsrv/done/`.
 

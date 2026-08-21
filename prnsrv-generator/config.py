@@ -4,10 +4,20 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from datetime import datetime, timezone
 
 
 def _prefix(value: str) -> str:
     return value.rstrip("/") + "/"
+
+
+def _utc_timestamp(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if parsed.tzinfo is None:
+        raise ValueError("RECONCILE_NOT_BEFORE must include a timezone")
+    return parsed.astimezone(timezone.utc)
 
 
 @dataclass(frozen=True)
@@ -26,6 +36,7 @@ class Settings:
     sscc_extension: str | None = "0"
     sscc_timeout_seconds: float = 15.0
     reconcile_hours: int = 48
+    reconcile_not_before: datetime | None = None
     stale_after_hours: int = 1
     s3_endpoint: str = "https://storage.yandexcloud.net"
     region: str = "ru-central1"
@@ -47,6 +58,7 @@ class Settings:
             sscc_extension=os.getenv("SSCC_EXTENSION", "0"),
             sscc_timeout_seconds=float(os.getenv("SSCC_TIMEOUT_SECONDS", "15")),
             reconcile_hours=int(os.getenv("RECONCILE_HOURS", "48")),
+            reconcile_not_before=_utc_timestamp(os.getenv("RECONCILE_NOT_BEFORE")),
             stale_after_hours=int(os.getenv("STALE_AFTER_HOURS", "1")),
             s3_endpoint=os.getenv("S3_ENDPOINT", "https://storage.yandexcloud.net"),
             region=os.getenv("AWS_REGION", "ru-central1"),
