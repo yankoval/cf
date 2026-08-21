@@ -108,6 +108,16 @@ python scripts/build.py --prnsrv-source ../../prnsrv
 
 Результат: `dist/prnsrv-generator.zip`. В корне архива находятся `index.py`, адаптер, зависимости и установленный пакет `prnsrv`; entrypoint остаётся `index.handler`.
 
+Для прямой загрузки через `yc` (лимит исходного ZIP — 3,5 МБ) используется
+лёгкий режим. Пакет `prnsrv` по-прежнему устанавливается из закреплённого GitHub
+commit, а `boto3` и `requests` платформа устанавливает из корневого
+`requirements.txt` при создании версии:
+
+```bash
+python scripts/build.py --skip-third-party \
+  --output dist/prnsrv-generator-source.zip
+```
+
 Сборщик по умолчанию загружает wheels для `manylinux2014_x86_64` и CPython 3.14 (`python314` — поддерживаемый runtime Yandex Cloud Functions), а не для локальной macOS. Параметры можно явно задать через `--target-platform` и `--python-version`; они должны совпадать с runtime версии Cloud Function.
 
 `build-manifest.json` фиксирует точную Git-зависимость. Для локального режима он дополнительно фиксирует commit и признак dirty worktree; такой архив не используется как production release.

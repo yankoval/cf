@@ -52,7 +52,15 @@ def build(args: argparse.Namespace) -> Path:
         for filename in APPLICATION_FILES:
             shutil.copy2(FUNCTION_ROOT / filename, stage / filename)
 
-        if not args.skip_third_party:
+        if args.skip_third_party:
+            # Cloud Functions installs dependencies from a root requirements.txt.
+            # Keeping only the requirements file makes the source ZIP small enough
+            # for direct upload while prnsrv itself is still pinned and installed
+            # from GitHub below.
+            shutil.copy2(
+                FUNCTION_ROOT / "requirements.txt", stage / "requirements.txt"
+            )
+        else:
             run(
                 [
                     sys.executable,
@@ -104,6 +112,9 @@ def build(args: argparse.Namespace) -> Path:
             json.dumps(
                 {
                     "function": "prnsrv-generator",
+                    "dependency_mode": (
+                        "cloud-build" if args.skip_third_party else "vendored"
+                    ),
                     "runtime": {
                         "implementation": "cp",
                         "python_version": args.python_version,
@@ -150,7 +161,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--skip-third-party",
         action="store_true",
-        help="Build a structural test ZIP without boto3/requests",
+        help=(
+            "Build a small Cloud Functions source ZIP: include requirements.txt "
+            "instead of vendoring boto3/requests"
+        ),
     )
     parser.add_argument("--python-version", default="314")
     parser.add_argument("--target-platform", default="manylinux2014_x86_64")
