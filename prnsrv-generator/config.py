@@ -6,9 +6,6 @@ import os
 from dataclasses import dataclass
 
 
-SSCC_GENERATOR_CI_URL = "https://functions.yandexcloud.net/d4et2pvmtgp0oo5pk0bh"
-
-
 def _prefix(value: str) -> str:
     return value.rstrip("/") + "/"
 
@@ -24,7 +21,7 @@ class Settings:
     mapping_key: str | None = None
     column_name: str = "C1"
     windows_csv_dir: str = r"C:\tmp"
-    sscc_url: str | None = SSCC_GENERATOR_CI_URL
+    sscc_url: str | None = None
     sscc_prefix: str = "460705179"
     sscc_extension: str | None = "0"
     sscc_timeout_seconds: float = 15.0
@@ -45,7 +42,7 @@ class Settings:
             mapping_key=os.getenv("MAPPING_KEY") or None,
             column_name=os.getenv("COLUMN_NAME", "C1"),
             windows_csv_dir=os.getenv("WINDOWS_CSV_DIR", r"C:\tmp"),
-            sscc_url=os.getenv("SSCC_URL", SSCC_GENERATOR_CI_URL),
+            sscc_url=os.getenv("SSCC_URL"),
             sscc_prefix=os.getenv("SSCC_PREFIX", "460705179"),
             sscc_extension=os.getenv("SSCC_EXTENSION", "0"),
             sscc_timeout_seconds=float(os.getenv("SSCC_TIMEOUT_SECONDS", "15")),
