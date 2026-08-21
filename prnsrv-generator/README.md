@@ -41,9 +41,8 @@ Yandex Cloud Function, заменяющая polling-обработчик `prnsrv
 | `STALE_AFTER_HOURS` | Нет | `1` |
 | `S3_ENDPOINT` | Нет | `https://storage.yandexcloud.net` |
 | `AWS_REGION` | Нет | `ru-central1` |
-| `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY` | Если SDK не получает credentials иным способом | — |
 
-Секреты не должны попадать в ZIP или Git. Для production они передаются через Lockbox/переменные версии функции.
+Статические S3-ключи функции не требуются. На каждый invocation она получает по IAM token из `context` ephemeral S3 key сроком 15 минут с inline-policy: LIST одного бакета, GET только входов/шаблонов/собственных outputs/done и PUT только outputs/done. У service account должны быть `storage.uploader` на конкретный bucket и право выпускать ephemeral key для самой себя. Общая bucket policy не используется и поэтому не влияет на существующих клиентов бакета.
 
 URL аллокатора не зашивается в Python-код. В production `SSCC_URL` указывает на
 `sscc-generator`, в тестовом контуре — на `sscc-generator-ci`.
