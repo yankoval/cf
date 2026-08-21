@@ -28,6 +28,9 @@ class EphemeralS3CredentialsTests(unittest.TestCase):
         policy = index._s3_access_policy(settings)
         statements = {item["Action"]: item for item in policy["Statement"]}
 
+        self.assertTrue(
+            all(item["Principal"] == "*" for item in policy["Statement"])
+        )
         self.assertEqual(
             f"arn:aws:s3:::{BUCKET}", statements["s3:ListBucket"]["Resource"]
         )
@@ -77,6 +80,9 @@ class EphemeralS3CredentialsTests(unittest.TestCase):
         self.assertEqual("900s", body["duration"])
         policy = json.loads(body["policy"])
         self.assertEqual("2012-10-17", policy["Version"])
+        self.assertTrue(
+            all(item["Principal"] == "*" for item in policy["Statement"])
+        )
 
     def test_context_token_is_required(self):
         with self.assertRaisesRegex(RuntimeError, "context IAM token is required"):
