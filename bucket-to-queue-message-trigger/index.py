@@ -12,6 +12,24 @@ logger.setLevel(logging.INFO)
 # Глобальный клиент SQS для переиспользования между вызовами (warm starts)
 sqs_client = None
 
+
+def _environment_list(name):
+    return tuple(
+        item.strip()
+        for item in os.getenv(name, "").split(",")
+        if item.strip()
+    )
+
+
+def _event_is_allowed(bucket_id, object_id):
+    allowed_buckets = _environment_list("ALLOWED_BUCKETS")
+    allowed_prefixes = _environment_list("ALLOWED_PREFIXES")
+    if allowed_buckets and bucket_id not in allowed_buckets:
+        return False
+    if allowed_prefixes and not object_id.startswith(allowed_prefixes):
+        return False
+    return True
+
 def get_sqs_client():
     """Создает и возвращает клиент для работы с Yandex Message Queue (SQS)."""
     global sqs_client
@@ -52,6 +70,8 @@ def handler(event, context):
 
     messages = event.get('messages', [])
     processed_count = 0
+    skipped_count = 0
+    failed_count = 0
 
     for message in messages:
         details = message.get('details', {})
@@ -60,6 +80,12 @@ def handler(event, context):
 
         if not bucket_id or not object_id:
             logger.warning(f"Missing bucket_id or object_id in message: {json.dumps(message)}")
+            skipped_count += 1
+            continue
+
+        if not _event_is_allowed(bucket_id, object_id):
+            logger.info("S3 event filtered out: s3://%s/%s", bucket_id, object_id)
+            skipped_count += 1
             continue
 
         # Данные для задачи
@@ -118,8 +144,12 @@ def handler(event, context):
             processed_count += 1
         except Exception as e:
             logger.error(f"Failed to send Celery message to queue for object {bucket_id}/{object_id}: {str(e)}")
+            failed_count += 1
 
     return {
-        'statusCode': 200,
-        'body': f"Processed {processed_count} messages"
+        'statusCode': 500 if failed_count else 200,
+        'body': (
+            f"Processed {processed_count}, skipped {skipped_count}, "
+            f"failed {failed_count} messages"
+        )
     }
