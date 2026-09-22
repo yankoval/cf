@@ -149,7 +149,8 @@ class Cloud:
             if time.monotonic() > deadline:
                 raise RuntimeError("Cloud operation timed out: " + operation["id"])
             time.sleep(5)
-            operation = self.call("/operations/" + operation["id"])
+            operation = request_json("https://operation.api.cloud.yandex.net/operations/" +
+                                     operation["id"], token=self.token)
         if "error" in operation:
             raise RuntimeError("Cloud operation failed: " + operation["id"] +
                                " code=" + str(operation["error"].get("code")))

@@ -48,6 +48,14 @@ class ReleaseTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "changed"):
             release.require_current(Cloud(), "expected")
 
+    def test_pending_operation_uses_yandex_operation_service(self):
+        finished = {"id": "operation-id", "done": True, "response": {"id": "version-id"}}
+        with patch.object(release, "request_json", return_value=finished) as request, \
+             patch.object(release.time, "sleep"):
+            result = release.Cloud("fake-token").operation({"id": "operation-id", "done": False})
+        self.assertEqual(result, {"id": "version-id"})
+        request.assert_called_once_with("https://operation.api.cloud.yandex.net/operations/operation-id", token="fake-token")
+
     def test_pr_cannot_request_cloud_identity(self):
         with patch.dict(release.os.environ, {"GITHUB_REPOSITORY": "yankoval/cf", "GITHUB_EVENT_NAME": "pull_request"}):
             with self.assertRaisesRegex(RuntimeError, "workflow dispatch"):
