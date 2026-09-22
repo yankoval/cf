@@ -11,6 +11,8 @@ from index import handler
 def reset_sqs_client():
     """Reset the global sqs_client in index.py before each test."""
     index.sqs_client = None
+    os.environ.pop('ALLOWED_BUCKETS', None)
+    os.environ.pop('ALLOWED_PREFIXES', None)
     yield
 
 @pytest.fixture
@@ -47,7 +49,7 @@ def test_handler_success(aws_credentials):
 
     response = handler(event, None)
     assert response['statusCode'] == 200
-    assert "Processed 1 messages" in response['body']
+    assert response['body'] == "Processed 1, skipped 0, failed 0 messages"
 
     # Verify message in queue
     messages = sqs.receive_message(QueueUrl=os.environ['QUEUE_URL'])['Messages']
@@ -103,4 +105,100 @@ def test_handler_missing_details(aws_credentials):
 
     response = handler(event, None)
     assert response['statusCode'] == 200
-    assert "Processed 0 messages" in response['body']
+    assert response['body'] == "Processed 0, skipped 1, failed 0 messages"
+
+
+@mock_aws
+def test_handler_filters_bucket_and_prefix_before_queue(aws_credentials):
+    os.environ['ALLOWED_BUCKETS'] = 'cloud-ediagg-test'
+    os.environ['ALLOWED_PREFIXES'] = (
+        'equipment-reports-disaggregation/,'
+        'disaggregationTasks/,'
+        'disaggregationReceipts/'
+    )
+    sqs = boto3.client(
+        'sqs',
+        region_name='us-east-1',
+        endpoint_url=os.environ['SQS_ENDPOINT'],
+    )
+    sqs.create_queue(QueueName='test-queue')
+    event = {
+        'messages': [
+            {
+                'details': {
+                    'bucket_id': 'cloud-ediagg-test',
+                    'object_id': 'disaggregationTasks/T-1.json',
+                }
+            },
+            {
+                'details': {
+                    'bucket_id': 'cloud-ediagg-test',
+                    'object_id': 'sign/body.json',
+                }
+            },
+            {
+                'details': {
+                    'bucket_id': 'production-bucket',
+                    'object_id': 'disaggregationTasks/T-2.json',
+                }
+            },
+        ]
+    }
+
+    response = handler(event, None)
+
+    assert response['statusCode'] == 200
+    assert response['body'] == "Processed 1, skipped 2, failed 0 messages"
+    messages = sqs.receive_message(QueueUrl=os.environ['QUEUE_URL'])['Messages']
+    assert len(messages) == 1
+    celery_msg = json.loads(messages[0]['Body'])
+    body_data = json.loads(base64.b64decode(celery_msg['body']))
+    assert body_data[0] == [{
+        'bucket': 'cloud-ediagg-test',
+        'key': 'disaggregationTasks/T-1.json',
+    }]
+
+
+@mock_aws
+def test_all_aggregate_stages_and_excluded_folders(aws_credentials, monkeypatch):
+    prefixes = [
+        'equipment-reports-disaggregation/', 'disaggregationTasks/',
+        'disaggregationReceipts/', 'equipment-reports-reaggregation-removing/',
+        'reaggregationTasks/', 'reaggregationReceipts/',
+    ]
+    monkeypatch.setenv('ALLOWED_BUCKETS', 'cloud-ediagg-test')
+    monkeypatch.setenv('ALLOWED_PREFIXES', ','.join(prefixes))
+    monkeypatch.setenv('CELERY_ROUTING_KEY', 'queue_xtrek_aggregate_test')
+    sqs = boto3.client('sqs', region_name='us-east-1', endpoint_url=os.environ['SQS_ENDPOINT'])
+    sqs.create_queue(QueueName='test-queue')
+    allowed = [prefix + 'T-1.json' for prefix in prefixes]
+    excluded = ['sign/body.json', 'tokens.json', 'tokens-v2.json',
+                'disaggregation/T-1.json', 'reaggregation/T-1.json',
+                'archive/reaggregationTasks/T-1.json',
+                'reaggregationTasks-backup/T-1.json',
+                'equipment-reports/T-1.json']
+    event = {'messages': [{'details': {'bucket_id': 'cloud-ediagg-test', 'object_id': key}}
+                           for key in allowed + excluded]}
+
+    response = handler(event, None)
+
+    assert response == {'statusCode': 200, 'body': 'Processed 6, skipped 8, failed 0 messages'}
+    messages = sqs.receive_message(QueueUrl=os.environ['QUEUE_URL'], MaxNumberOfMessages=10)['Messages']
+    assert len(messages) == 6
+    decoded = [json.loads(message['Body']) for message in messages]
+    assert {json.loads(base64.b64decode(item['body']))[0][0]['key'] for item in decoded} == set(allowed)
+    assert all(item['properties']['delivery_info']['routing_key'] == 'queue_xtrek_aggregate_test'
+               for item in decoded)
+
+
+def test_send_failure_requests_retry(aws_credentials, monkeypatch):
+    from unittest.mock import MagicMock
+    client = MagicMock()
+    client.send_message.side_effect = RuntimeError('temporary queue failure')
+    monkeypatch.setattr(index, 'get_sqs_client', lambda: client)
+
+    response = handler({'messages': [{'details': {
+        'bucket_id': 'cloud-ediagg-test', 'object_id': 'disaggregationTasks/T-1.json',
+    }}]}, None)
+
+    assert response == {'statusCode': 500, 'body': 'Processed 0, skipped 0, failed 1 messages'}
