@@ -79,5 +79,17 @@ SSCC в задании v1 считается ошибкой, и уведомле
 ## Локальная проверка
 
 ```bash
+python -m pip install --require-hashes -r max-messenger-notifier/requirements.txt
 python -m unittest discover -s max-messenger-notifier -p 'test_*.py' -v
+python -m unittest discover -s scripts -p 'test_max_release.py' -v
 ```
+
+## Публикация и происхождение версии
+
+Штатная публикация выполняется вручную через GitHub Actions после принятия PR.
+Workflow сохраняет коммит, хеши исходников, точный ZIP и ID облачной версии.
+Рабочий триггер должен использовать `production-stable`; новая версия проходит
+проверку до переноса этого тега. Зависимости закреплены вместе с хешами.
+
+Однократная настройка OIDC, выпуск, проверка происхождения и откат описаны
+в [RELEASE.md](RELEASE.md).
