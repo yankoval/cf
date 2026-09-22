@@ -129,7 +129,7 @@ def github_token():
     token = request_json("https://auth.yandex.cloud/oauth/token", form={
         "grant_type": "urn:ietf:params:oauth:grant-type:token-exchange",
         "requested_token_type": "urn:ietf:params:oauth:token-type:access_token",
-        "audience": os.environ["YC_MAX_DEPLOY_SA_ID"], "subject_token": jwt,
+        "audience": os.environ["YC_CF_DEPLOY_SA_ID"], "subject_token": jwt,
         "subject_token_type": "urn:ietf:params:oauth:token-type:id_token",
     })["access_token"]
     print("::add-mask::" + token)

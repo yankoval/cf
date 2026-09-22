@@ -59,7 +59,7 @@ jobs:
     needs: test-and-build
     runs-on: ubuntu-24.04
     timeout-minutes: 25
-    environment: max-production
+    environment: cf-deploy
     concurrency:
       group: max-production
       cancel-in-progress: false
@@ -79,7 +79,7 @@ jobs:
           path: dist/max-notifier/
       - name: Publish, check candidate, and move production-stable
         env:
-          YC_MAX_DEPLOY_SA_ID: ${{ vars.YC_MAX_DEPLOY_SA_ID }}
+          YC_CF_DEPLOY_SA_ID: ${{ vars.YC_CF_DEPLOY_SA_ID }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           EXPECTED_CURRENT_VERSION: ${{ inputs.expected_current_version }}
           ROLLBACK_VERSION: ${{ inputs.rollback_version }}
