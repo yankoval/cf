@@ -1,0 +1,4 @@
+boto3==1.43.99
+requests==2.34.2
+Pillow==12.3.0
+python-barcode==0.16.1
