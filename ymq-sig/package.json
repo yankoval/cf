@@ -1,6 +1,7 @@
 {
   "name": "ymq-sig",
-  "version": "1.0.0",
+  "version": "2.0.0",
+  "scripts": { "test": "node --test tests/*.test.js", "start": "node server.js" },
   "description": "YMQ Proxy and S3 Link Signer",
   "main": "index.js",
   "dependencies": {
