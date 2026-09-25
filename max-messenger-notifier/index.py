@@ -4,6 +4,7 @@ import logging
 import os
 import re
 import time
+from html import escape
 from collections.abc import Iterable, Mapping, Sequence
 
 import boto3
@@ -55,12 +56,11 @@ def task_handler(event, context):
             "Bucket": bucket, "Key": key,
             "ResponseContentDisposition": "attachment",
         }, ExpiresIn=86400)
-        text = (f"Задание оборудования\n{task_id}\n\n"
-                "Загрузка файлов в MAX временно недоступна.\n"
-                "Скачать исходный JSON (ссылка действует 24 часа):\n" + url)
-        response = requests.post(MAX_API_URL, params={"chat_id": chat_id},
+        text = (f"<b>Задание оборудования</b>\n{escape(task_id)}\n\n"
+                f'<a href="{escape(url, quote=True)}">📄 Скачать JSON</a>')
+        response = requests.post(MAX_API_URL, params={"chat_id": chat_id, "disable_link_preview": "true"},
                                  headers={"Authorization": token},
-                                 json={"text": text, "notify": True},
+                                 json={"text": text, "notify": True, "format": "html"},
                                  timeout=20, verify=MAX_CA_FILE)
         # A timeout is ambiguous: never retry automatically here.
         if response.status_code != 200:
