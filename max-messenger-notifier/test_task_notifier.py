@@ -56,7 +56,7 @@ class TaskNotifierTests(unittest.TestCase):
     @patch('index.short_links.create_link')
     @patch('index.requests.post')
     @patch('index.get_s3_client')
-    def test_short_link_is_sent_once_with_absolute_deadline(self, s3, post, create):
+    def test_short_link_is_sent_once_in_approved_compact_html_format(self, s3, post, create):
         source = b'{"id":"T-test"}\r\n'
         s3.return_value.get_object.return_value = {'Body': io.BytesIO(source)}
         create.return_value = {'url': 'https://download.example/?id=opaque', 'expires_at': 1790434800}
@@ -71,9 +71,27 @@ class TaskNotifierTests(unittest.TestCase):
         self.assertEqual(result['deliveries'][0]['message_id'], 'mid.short')
         text = post.call_args.kwargs['json']['text']
         self.assertIn(create.return_value['url'], text)
-        self.assertIn('МСК', text)
+        self.assertIn('📄 Скачать JSON</a>', text)
+        self.assertNotIn('временно недоступна', text)
+        self.assertEqual(post.call_args.kwargs['json']['format'], 'html')
+        self.assertEqual(post.call_args.kwargs['params']['disable_link_preview'], 'true')
         self.assertNotIn('24 часа', text)
         self.assertNotIn('opaque', str(logs.output) + str(result))
+
+    @patch('index.requests.post')
+    @patch('index.get_s3_client')
+    def test_long_link_fallback_preserves_signature_and_escapes_html(self, s3, post):
+        import html
+        s3.return_value.get_object.return_value = {'Body': io.BytesIO(b'{"id":"T-test"}')}
+        url = 'https://storage.example/?a=1&signature=abc%2Bdef&filename="test"'
+        s3.return_value.generate_presigned_url.return_value = url
+        post.return_value.status_code = 200
+        post.return_value.json.return_value = {'message': {'body': {'mid': 'mid.123'}}}
+        index.task_handler(self.event, None)
+        text = post.call_args.kwargs['json']['text']
+        self.assertIn('href="' + html.escape(url, quote=True) + '"', text)
+        self.assertIn('📄 Скачать JSON</a>', text)
+        self.assertEqual(post.call_args.kwargs['params']['disable_link_preview'], 'true')
 
     @patch('index.short_links.create_link', side_effect=index.short_links.LinkError('expired'))
     @patch('index.requests.post')

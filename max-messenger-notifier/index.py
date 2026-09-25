@@ -1,3 +1,4 @@
+import html
 import io
 import json
 import logging
@@ -5,8 +6,6 @@ import os
 import re
 import time
 from collections.abc import Iterable, Mapping, Sequence
-from datetime import datetime
-from zoneinfo import ZoneInfo
 
 import boto3
 import requests
@@ -66,20 +65,16 @@ def task_handler(event, context):
         if link_mode == "on":
             link = short_links.create_link(bucket, key, source_bytes, obj.get("VersionId"))
             url = link["url"]
-            deadline = datetime.fromtimestamp(link["expires_at"], ZoneInfo("Europe/Moscow"))
-            download_text = f"Скачать исходный JSON (до {deadline:%d.%m.%Y %H:%M:%S} МСК):\n"
         else:
             url = client.generate_presigned_url("get_object", Params={
                 "Bucket": bucket, "Key": key,
                 "ResponseContentDisposition": "attachment",
             }, ExpiresIn=86400)
-            download_text = "Скачать исходный JSON (ссылка действует 24 часа):\n"
-        text = (f"Задание оборудования\n{task_id}\n\n"
-                "Загрузка файлов в MAX временно недоступна.\n"
-                + download_text + url)
-        response = requests.post(MAX_API_URL, params={"chat_id": chat_id},
+        text = (f"Задание оборудования\n{html.escape(task_id)}\n\n"
+                f'<a href="{html.escape(url, quote=True)}">📄 Скачать JSON</a>')
+        response = requests.post(MAX_API_URL, params={"chat_id": chat_id, "disable_link_preview": "true"},
                                  headers={"Authorization": token},
-                                 json={"text": text, "notify": True},
+                                 json={"text": text, "format": "html", "notify": True},
                                  timeout=20, verify=MAX_CA_FILE)
         # A timeout is ambiguous: never retry automatically here.
         if response.status_code != 200:
