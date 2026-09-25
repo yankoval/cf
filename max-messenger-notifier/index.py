@@ -74,7 +74,7 @@ def task_handler(event, context):
                 f'<a href="{escape(url, quote=True)}">📄 Скачать JSON</a>')
         response = requests.post(MAX_API_URL, params={"chat_id": chat_id, "disable_link_preview": "true"},
                                  headers={"Authorization": token},
-                                 json={"text": text, "format": "html", "notify": True},
+                                 json={"text": text, "notify": True, "format": "html"},
                                  timeout=20, verify=MAX_CA_FILE)
         # A timeout is ambiguous: never retry automatically here.
         if response.status_code != 200:
