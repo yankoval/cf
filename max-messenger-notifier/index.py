@@ -1,10 +1,10 @@
-import html
 import io
 import json
 import logging
 import os
 import re
 import time
+from html import escape
 from collections.abc import Iterable, Mapping, Sequence
 
 import boto3
@@ -70,8 +70,8 @@ def task_handler(event, context):
                 "Bucket": bucket, "Key": key,
                 "ResponseContentDisposition": "attachment",
             }, ExpiresIn=86400)
-        text = (f"Задание оборудования\n{html.escape(task_id)}\n\n"
-                f'<a href="{html.escape(url, quote=True)}">📄 Скачать JSON</a>')
+        text = (f"<b>Задание оборудования</b>\n{escape(task_id)}\n\n"
+                f'<a href="{escape(url, quote=True)}">📄 Скачать JSON</a>')
         response = requests.post(MAX_API_URL, params={"chat_id": chat_id, "disable_link_preview": "true"},
                                  headers={"Authorization": token},
                                  json={"text": text, "format": "html", "notify": True},
