@@ -14,6 +14,8 @@ from barcode.writer import ImageWriter
 from botocore.exceptions import ClientError
 from PIL import Image, ImageDraw, ImageFont
 
+import short_links
+
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -34,12 +36,16 @@ s3_client = None
 def task_handler(event, context):
     """Notification-only recovery route: read existing JSON and send a 48h link.
 
-    No writes to S3, no queue messages, no production workflow invocation.
+    Only optional private link-registry writes; production inputs stay read-only.
+    No queue messages or production workflow invocation.
     """
     token = os.environ.get("MAX_BOT_TOKEN")
     chat_id = os.environ.get("MAX_CHAT_ID")
     if not token or not chat_id:
         raise ValueError("Missing MAX notification settings")
+    link_mode = os.environ.get("MAX_SHORT_LINK_MODE", "off")
+    if link_mode not in ("off", "on"):
+        raise ValueError("Invalid MAX_SHORT_LINK_MODE")
     deliveries = []
     for message in event.get("messages", []):
         details = message.get("details", {})
@@ -48,14 +54,22 @@ def task_handler(event, context):
             raise ValueError("Unexpected task notification route")
         client = get_s3_client()
         obj = client.get_object(Bucket=bucket, Key=key)
-        task = json.loads(obj["Body"].read())
+        try:
+            source_bytes = obj["Body"].read()
+        finally:
+            obj["Body"].close()
+        task = json.loads(source_bytes)
         task_id = key.rsplit("/", 1)[-1][:-5]
         if task.get("id") != task_id:
             raise ValueError("Task filename and id mismatch")
-        url = client.generate_presigned_url("get_object", Params={
-            "Bucket": bucket, "Key": key,
-            "ResponseContentDisposition": "attachment",
-        }, ExpiresIn=172800)
+        if link_mode == "on":
+            link = short_links.create_link(bucket, key, source_bytes, obj.get("VersionId"))
+            url = link["url"]
+        else:
+            url = client.generate_presigned_url("get_object", Params={
+                "Bucket": bucket, "Key": key,
+                "ResponseContentDisposition": "attachment",
+            }, ExpiresIn=172800)
         text = (f"<b>Задание оборудования</b>\n{escape(task_id)}\n\n"
                 f'<a href="{escape(url, quote=True)}">📄 Скачать JSON</a>')
         response = requests.post(MAX_API_URL, params={"chat_id": chat_id, "disable_link_preview": "true"},

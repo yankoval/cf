@@ -6,6 +6,7 @@ on:
       - 'max-messenger-notifier/**'
       - 'scripts/max_release.py'
       - 'scripts/test_max_release.py'
+      - 'scripts/check_short_link_download.py'
       - '.github/workflows/max-notifier.yml'
   workflow_dispatch:
     inputs:

@@ -23,6 +23,18 @@ class ReleaseTests(unittest.TestCase):
             self.assertEqual(set(archive.namelist()), {*self.sources, "build-info.json"})
             self.assertEqual(json.loads(archive.read("build-info.json"))["commit"], self.commit)
 
+    def test_actual_runtime_package_includes_and_verifies_short_link_handler(self):
+        sources = {name: (release.COMPONENT / name).read_bytes() for name in release.FILES}
+        package, manifest = release.package_bytes(self.commit, sources)
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory)
+            (output / 'max-notifier.zip').write_bytes(package)
+            (output / 'manifest.json').write_bytes(release.json_bytes(manifest))
+            verified, _ = release.verify_package(output, self.commit)
+            with zipfile.ZipFile(io.BytesIO(verified)) as archive:
+                self.assertIn('short_links.py', archive.namelist())
+                self.assertNotIn('check_short_link_download.py', archive.namelist())
+
     def test_modified_package_is_rejected_before_cloud_access(self):
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory)
