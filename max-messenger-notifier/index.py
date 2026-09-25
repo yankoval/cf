@@ -32,7 +32,7 @@ s3_client = None
 
 
 def task_handler(event, context):
-    """Notification-only recovery route: read existing JSON and send a 24h link.
+    """Notification-only recovery route: read existing JSON and send a 48h link.
 
     No writes to S3, no queue messages, no production workflow invocation.
     """
@@ -55,7 +55,7 @@ def task_handler(event, context):
         url = client.generate_presigned_url("get_object", Params={
             "Bucket": bucket, "Key": key,
             "ResponseContentDisposition": "attachment",
-        }, ExpiresIn=86400)
+        }, ExpiresIn=172800)
         text = (f"<b>Задание оборудования</b>\n{escape(task_id)}\n\n"
                 f'<a href="{escape(url, quote=True)}">📄 Скачать JSON</a>')
         response = requests.post(MAX_API_URL, params={"chat_id": chat_id, "disable_link_preview": "true"},
