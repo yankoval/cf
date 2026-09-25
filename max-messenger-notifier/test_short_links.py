@@ -90,7 +90,7 @@ class ShortLinkTests(unittest.TestCase):
         first = self.create()
         with patch.object(links.time, "time", return_value=NOW + 5000):
             self.assertEqual(first, self.create())
-        self.assertEqual(first["expires_at"], NOW + 86400)
+        self.assertEqual(first["expires_at"], NOW + 172800)
         self.assertEqual((self.s3.writes, self.s3.signs), (1, 1))
         self.assertRegex(parse_qs(urlsplit(first["url"]).query)["id"][0], r"^[A-Za-z0-9_-]{32}$")
         self.assertNotIn("T-test", first["url"])
@@ -115,9 +115,11 @@ class ShortLinkTests(unittest.TestCase):
 
     def test_expiry_boundary_never_renews(self):
         event = self.event()
-        with patch.object(links.time, "time", return_value=NOW + 86399):
-            self.assertEqual(links.handler(event, None)["statusCode"], 302)
         with patch.object(links.time, "time", return_value=NOW + 86400):
+            self.assertEqual(links.handler(event, None)["statusCode"], 302)
+        with patch.object(links.time, "time", return_value=NOW + 172799):
+            self.assertEqual(links.handler(event, None)["statusCode"], 302)
+        with patch.object(links.time, "time", return_value=NOW + 172800):
             self.assertEqual(links.handler(event, None)["statusCode"], 410)
             with self.assertRaisesRegex(links.LinkError, "expired"):
                 self.create()
@@ -136,7 +138,7 @@ class ShortLinkTests(unittest.TestCase):
             original(**kwargs)
             raise TimeoutError("sensitive URL must never surface")
         with patch.object(self.s3, "put_object", side_effect=lost_ack):
-            self.assertEqual(self.create()["expires_at"], NOW + 86400)
+            self.assertEqual(self.create()["expires_at"], NOW + 172800)
 
     def test_unconfirmed_put_fails_without_a_link(self):
         with patch.object(self.s3, "put_object", side_effect=TimeoutError("sensitive")):
@@ -188,8 +190,8 @@ class ShortLinkTests(unittest.TestCase):
             good["url"].replace("storage.yandexcloud.net", "evil.example"),
             good["url"].replace("https:", "http:"),
             good["url"] + "&url=https://evil.example",
-            good["url"] + "&X-Amz-Expires=86400",
-            good["url"].replace("X-Amz-Expires=86400", "X-Amz-Expires=172800"),
+            good["url"] + "&X-Amz-Expires=172800",
+            good["url"].replace("X-Amz-Expires=172800", "X-Amz-Expires=345600"),
             good["url"].replace("T-test.json", "T-other.json"),
             good["url"] + "\r\nLocation: https://evil.example",
         ]
@@ -199,7 +201,7 @@ class ShortLinkTests(unittest.TestCase):
                 result = links.handler(event, None)
                 self.assertEqual(result["statusCode"], 503)
                 self.assertNotIn("Location", result["headers"])
-        for changes in ({"expires_at": NOW + 172800}, {"bucket": "wrong"}, {"key": "Задания/T-test.json"}):
+        for changes in ({"expires_at": NOW + 345600}, {"bucket": "wrong"}, {"key": "Задания/T-test.json"}):
             self.replace_record(dict(good, **changes))
             self.assertEqual(links.handler(event, None)["statusCode"], 503)
 

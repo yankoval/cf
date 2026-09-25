@@ -21,7 +21,7 @@ from botocore.exceptions import ClientError
 BUCKET = "1bf11148-3595-4a07-a089-d460153b7c7a"
 ENDPOINT = "https://storage.yandexcloud.net"
 REGISTRY_PREFIX = "_max-short-links/v1/"
-TTL = 86400
+TTL = 172800
 TOKEN_RE = re.compile(r"[A-Za-z0-9_-]{32}")
 KEY_RE = re.compile(r"equipment-tasks/T-[A-Za-z0-9_-]+\.json")
 logger = logging.getLogger(__name__)
