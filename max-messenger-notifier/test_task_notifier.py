@@ -3,7 +3,9 @@ import json
 import os
 import unittest
 from unittest.mock import MagicMock, patch
+from html.parser import HTMLParser
 import index
+import requests
 
 
 class TaskNotifierTests(unittest.TestCase):
@@ -28,6 +30,44 @@ class TaskNotifierTests(unittest.TestCase):
         self.assertEqual(post.call_count, 1)
         self.assertEqual(post.call_args.kwargs['verify'], index.MAX_CA_FILE)
         self.assertNotIn('attachments', post.call_args.kwargs['json'])
+        self.assertEqual(post.call_args.kwargs['params'], {'chat_id': '-1', 'disable_link_preview': 'true'})
+        self.assertEqual(post.call_args.kwargs['json'], {
+            'text': '<b>Задание оборудования</b>\nT-test\n\n<a href="https://storage.example/private-download">📄 Скачать JSON</a>',
+            'notify': True, 'format': 'html',
+        })
+
+    @patch('index.requests.post')
+    @patch('index.get_s3_client')
+    def test_html_escapes_id_and_preserves_signed_url(self, s3, post):
+        task_id = 'T-<b>"&test'
+        self.event['messages'][0]['details']['object_id'] = f'equipment-tasks/{task_id}.json'
+        url = 'https://storage.example/T-test.json?signature=a%2Bb%3D&name="task"&other=1'
+        s3.return_value.get_object.return_value = {'Body': io.BytesIO(json.dumps({'id': task_id}).encode())}
+        s3.return_value.generate_presigned_url.return_value = url
+        post.return_value.status_code = 200
+        post.return_value.json.return_value = {'message': {'body': {'mid': 'mid.escaped'}}}
+        index.task_handler(self.event, None)
+        text = post.call_args.kwargs['json']['text']
+        self.assertIn('T-&lt;b&gt;&quot;&amp;test', text)
+        self.assertIn('&amp;name=&quot;task&quot;', text)
+        links = []
+        class Links(HTMLParser):
+            def handle_starttag(self, tag, attrs):
+                if tag == 'a':
+                    links.append(dict(attrs)['href'])
+        Links().feed(text)
+        self.assertEqual(links, [url])
+        self.assertNotIn('Загрузка файлов', text)
+        self.assertNotIn('Скачать исходный', text)
+
+    @patch('index.requests.post', side_effect=requests.Timeout('ambiguous'))
+    @patch('index.get_s3_client')
+    def test_timeout_is_not_retried(self, s3, post):
+        s3.return_value.get_object.return_value = {'Body': io.BytesIO(b'{"id":"T-test"}')}
+        s3.return_value.generate_presigned_url.return_value = 'https://storage.example/link'
+        with self.assertRaises(requests.Timeout):
+            index.task_handler(self.event, None)
+        post.assert_called_once()
 
     @patch('index.get_s3_client')
     def test_rejects_production_input_before_access(self, s3):
