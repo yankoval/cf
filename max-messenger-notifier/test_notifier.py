@@ -724,7 +724,7 @@ class TestNotifier(unittest.TestCase):
         init_response = MagicMock()
         init_response.json.return_value = {"url": "https://upload.example"}
         upload_response = MagicMock()
-        upload_response.json.return_value = {"token": "file-token"}
+        upload_response.json.return_value = {"photos": {"1": {"token": "image-token"}}}
         final_response = MagicMock()
         final_response.status_code = 200
         mock_post.side_effect = [
@@ -743,6 +743,10 @@ class TestNotifier(unittest.TestCase):
 
         self.assertTrue(result)
         self.assertEqual(mock_post.call_count, 3)
+        self.assertEqual(mock_post.call_args_list[0].kwargs["params"], {"type": "image"})
+        self.assertEqual(mock_post.call_args_list[0].kwargs["verify"], index.MAX_CA_FILE)
+        self.assertIn("data", mock_post.call_args_list[1].kwargs["files"])
+        self.assertEqual(mock_post.call_args_list[2].kwargs["json"]["attachments"][0]["type"], "image")
 
     @patch("index.time.sleep")
     @patch("index.requests.post")
@@ -754,7 +758,7 @@ class TestNotifier(unittest.TestCase):
         init_response = MagicMock()
         init_response.json.return_value = {"url": "https://upload.example"}
         upload_response = MagicMock()
-        upload_response.json.return_value = {"token": "file-token"}
+        upload_response.json.return_value = {"photos": {"1": {"token": "image-token"}}}
         pending_response = MagicMock()
         pending_response.status_code = 409
         pending_response.json.return_value = {
@@ -791,7 +795,7 @@ class TestNotifier(unittest.TestCase):
         init_response = MagicMock()
         init_response.json.return_value = {"url": "https://upload.example"}
         upload_response = MagicMock()
-        upload_response.json.return_value = {"token": "file-token"}
+        upload_response.json.return_value = {"photos": {"1": {"token": "image-token"}}}
         error_response = MagicMock()
         error_response.status_code = 400
         error_response.json.return_value = {"code": "invalid.request"}
@@ -836,6 +840,19 @@ class TestNotifier(unittest.TestCase):
                 file_name="file.png",
                 file_bytes=b"png",
             )
+
+
+    @patch("index.requests.post")
+    def test_upload_business_error_does_not_send_message(self, mock_post):
+        init = MagicMock()
+        init.json.return_value = {"url": "https://upload.example"}
+        upload = MagicMock()
+        upload.status_code = 200
+        upload.json.return_value = {"code": "upload.error", "message": "Unexpected server error", "token": "secret"}
+        mock_post.side_effect = [init, upload]
+        with self.assertRaisesRegex(ValueError, "code=upload.error"):
+            index.send_file_message(token="token", chat_id="chat", text="message", file_name="a.png", file_bytes=b"png")
+        self.assertEqual(mock_post.call_count, 2)
 
 
 if __name__ == "__main__":

@@ -21,11 +21,59 @@ logger.setLevel(logging.INFO)
 # автоматически подставленный proxy.
 os.environ["no_proxy"] = "*"
 
-MAX_API_URL = "https://platform-api.max.ru/messages"
-MAX_UPLOAD_URL = "https://platform-api.max.ru/uploads"
+MAX_API_URL = "https://platform-api2.max.ru/messages"
+MAX_UPLOAD_URL = "https://platform-api2.max.ru/uploads"
+# Application-local trust for MAX only; S3 and the operating system are unchanged.
+MAX_CA_FILE = os.path.join(os.path.dirname(__file__), "russian-root.pem")
 DEFAULT_TASKS_PREFIX = "equipment-tasks"
 
 s3_client = None
+
+
+def task_handler(event, context):
+    """Notification-only recovery route: read existing JSON and send a 24h link.
+
+    No writes to S3, no queue messages, no production workflow invocation.
+    """
+    token = os.environ.get("MAX_BOT_TOKEN")
+    chat_id = os.environ.get("MAX_CHAT_ID")
+    if not token or not chat_id:
+        raise ValueError("Missing MAX notification settings")
+    deliveries = []
+    for message in event.get("messages", []):
+        details = message.get("details", {})
+        bucket, key = details.get("bucket_id"), details.get("object_id")
+        if bucket != "1bf11148-3595-4a07-a089-d460153b7c7a" or not isinstance(key, str) or not key.startswith("equipment-tasks/T-") or not key.endswith(".json"):
+            raise ValueError("Unexpected task notification route")
+        client = get_s3_client()
+        obj = client.get_object(Bucket=bucket, Key=key)
+        task = json.loads(obj["Body"].read())
+        task_id = key.rsplit("/", 1)[-1][:-5]
+        if task.get("id") != task_id:
+            raise ValueError("Task filename and id mismatch")
+        url = client.generate_presigned_url("get_object", Params={
+            "Bucket": bucket, "Key": key,
+            "ResponseContentDisposition": "attachment",
+        }, ExpiresIn=86400)
+        text = (f"Задание оборудования\n{task_id}\n\n"
+                "Загрузка файлов в MAX временно недоступна.\n"
+                "Скачать исходный JSON (ссылка действует 24 часа):\n" + url)
+        response = requests.post(MAX_API_URL, params={"chat_id": chat_id},
+                                 headers={"Authorization": token},
+                                 json={"text": text, "notify": True},
+                                 timeout=20, verify=MAX_CA_FILE)
+        # A timeout is ambiguous: never retry automatically here.
+        if response.status_code != 200:
+            raise RuntimeError(f"MAX task message HTTP {response.status_code}")
+        result = response.json()
+        mid = result.get("message", {}).get("body", {}).get("mid") if isinstance(result, dict) else None
+        if not isinstance(mid, str) or not mid or result.get("code") or result.get("success") is False:
+            raise RuntimeError("MAX did not confirm task message; reconcile before retry")
+        logger.info("MAX task message sent: object=%s message_id=%s mode=link", key, mid)
+        deliveries.append({"object": key, "message_id": mid, "mode": "link"})
+    if not deliveries:
+        return {"statusCode": 200, "body": "OK"}
+    return {"statusCode": 200, "body": "OK", "deliveries": deliveries}
 
 
 def normalize_sscc(value: object, field_name: str = "SSCC") -> str:
@@ -707,37 +755,47 @@ def send_file_message(
     file_name: str,
     file_bytes: bytes,
 ) -> bool:
-    """Загрузить PNG и отправить сообщение, ожидая готовности вложения."""
+    """Отправить PNG как image: файловый backend MAX может быть недоступен."""
     auth_headers = {"Authorization": token}
     init_response = requests.post(
         MAX_UPLOAD_URL,
-        params={"type": "file"},
+        params={"type": "image"},
         headers=auth_headers,
         timeout=10,
+        verify=MAX_CA_FILE,
     )
     init_response.raise_for_status()
     upload_url = init_response.json().get("url")
     if not upload_url:
         raise ValueError(
-            f"MAX не вернул URL загрузки: {init_response.text}"
+            "MAX не вернул URL загрузки"
         )
 
     upload_response = requests.post(
         upload_url,
         headers=auth_headers,
-        files={"file": (file_name, file_bytes, "image/png")},
+        files={"data": (file_name, file_bytes, "image/png")},
         timeout=30,
     )
     upload_response.raise_for_status()
-    file_token = upload_response.json().get("token")
-    if not file_token:
-        raise ValueError("MAX не вернул token после загрузки файла")
+    upload_data = upload_response.json()
+    # MAX may return HTTP 200 with {code: upload.error}, not an attachment.
+    if not isinstance(upload_data, dict) or upload_data.get("code"):
+        code = upload_data.get("code", "invalid.response") if isinstance(upload_data, dict) else "invalid.response"
+        safe_code = re.sub(r"[^a-zA-Z0-9_.-]", "", str(code))[:80]
+        raise ValueError(f"MAX upload failed: code={safe_code}")
+    photos = upload_data.get("photos", {})
+    tokens = [photo["token"] for photo in photos.values()
+              if isinstance(photo, dict) and isinstance(photo.get("token"), str) and photo["token"]] if isinstance(photos, dict) else []
+    if len(tokens) != 1:
+        raise ValueError("MAX не вернул token единственного изображения")
+    file_token = tokens[0]
 
     payload = {
         "text": text,
         "attachments": [
             {
-                "type": "file",
+                "type": "image",
                 "payload": {"token": file_token},
             }
         ],
@@ -755,11 +813,18 @@ def send_file_message(
             json=payload,
             headers=message_headers,
             timeout=20,
+            verify=MAX_CA_FILE,
         )
         if response.status_code == 200:
+            result = response.json()
+            if isinstance(result, dict) and (result.get("code") or result.get("success") is False):
+                logger.error("MAX returned a business error with HTTP 200")
+                return False
+            message_id = result.get("message", {}).get("body", {}).get("mid") if isinstance(result, dict) else None
             logger.info(
-                "MAX message sent on attempt %s",
+                "MAX message sent on attempt %s; message_id=%s",
                 attempt + 1,
+                message_id,
             )
             return True
 
@@ -770,9 +835,8 @@ def send_file_message(
 
         if response_data.get("code") != "attachment.not.ready":
             logger.error(
-                "MAX API error %s: %s",
+                "MAX API error status=%s",
                 response.status_code,
-                response.text,
             )
             return False
 
@@ -798,6 +862,7 @@ def handler(event, context):
         return {"statusCode": 500, "body": "Configuration error"}
 
     s3 = get_s3_client()
+    deliveries = []
 
     for message in event.get("messages", []):
         details = message.get("details", {})
@@ -843,6 +908,7 @@ def handler(event, context):
                     file_name=f"report_{report_id_for_file}.png",
                     file_bytes=create_info_image(report_info),
                 )
+                deliveries.append({"object": object_id, "kind": "summary", "sent": bool(summary_sent)})
                 if not summary_sent:
                     logger.error(
                         "Summary notification failed for report %s",
@@ -887,6 +953,7 @@ def handler(event, context):
                             products_count=pallet_info["products"],
                         ),
                     )
+                    deliveries.append({"object": object_id, "sscc": pallet_number, "sent": bool(label_sent)})
                     if not label_sent:
                         logger.error(
                             "Pallet label notification failed: "
@@ -895,6 +962,7 @@ def handler(event, context):
                             pallet_number,
                         )
                 except Exception as error:
+                    deliveries.append({"object": object_id, "sscc": pallet_number, "sent": False})
                     logger.exception(
                         "Pallet label notification error: "
                         "report=%s sscc=%s error=%s",
@@ -904,10 +972,14 @@ def handler(event, context):
                     )
 
         except Exception as error:
+            deliveries.append({"object": object_id, "sent": False})
             logger.exception(
                 "Critical error processing object %s: %s",
                 object_id,
                 error,
             )
 
-    return {"statusCode": 200, "body": "OK"}
+    response = {"statusCode": 200, "body": "OK"}
+    if deliveries:
+        response["deliveries"] = deliveries
+    return response
