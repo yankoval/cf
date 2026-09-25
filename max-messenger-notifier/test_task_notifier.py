@@ -25,7 +25,7 @@ class TaskNotifierTests(unittest.TestCase):
         post.return_value.json.return_value = {'message': {'body': {'mid': 'mid.123'}}}
         result = index.task_handler(self.event, None)
         self.assertEqual(result['deliveries'][0]['message_id'], 'mid.123')
-        self.assertEqual(s3.return_value.generate_presigned_url.call_args.kwargs['ExpiresIn'], 86400)
+        self.assertEqual(s3.return_value.generate_presigned_url.call_args.kwargs['ExpiresIn'], 172800)
         self.assertEqual([c[0] for c in s3.return_value.mock_calls], ['get_object', 'generate_presigned_url'])
         self.assertEqual(post.call_count, 1)
         self.assertEqual(post.call_args.kwargs['verify'], index.MAX_CA_FILE)
