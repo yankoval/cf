@@ -20,7 +20,7 @@ COMPONENT = ROOT / "max-messenger-notifier"
 FUNCTION_ID = "d4ep5laqq7maeesp0lcd"
 STABLE = "production-stable"
 API = "https://serverless-functions.api.cloud.yandex.net/functions/v1"
-FILES = ("index.py", "requirements.txt", "DejaVuSans.ttf", "russian-root.pem")
+FILES = ("index.py", "short_links.py", "requirements.txt", "DejaVuSans.ttf", "russian-root.pem")
 CONFIG_KEYS = (
     "runtime", "entrypoint", "resources", "executionTimeout", "serviceAccountId",
     "environment", "namedServiceAccounts", "concurrency", "connectivity", "secrets",
